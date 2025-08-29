@@ -490,6 +490,21 @@ namespace TetrisMultiplayer.Networking
             }
         }
 
+        // Client: Allgemeine Methode zum Senden von Nachrichten an Host
+        public async Task SendToHostAsync(object message)
+        {
+            if (_clientStream == null) return;
+            
+            try
+            {
+                await WriteFramedJsonAsync(_clientStream, message, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error sending message to host: {ex.Message}");
+            }
+        }
+
         // Client: Warte auf RoundResults
     public Task<RoundResultsDto?> ReceiveRoundResultsAsync(CancellationToken cancellationToken)
         {
@@ -816,6 +831,110 @@ namespace TetrisMultiplayer.Networking
                     _clientMessageQueue.Enqueue(tempQueue.Dequeue());
             }
             return Task.FromResult<string?>(null);
+        }
+
+        // Host: Sende RoundReadyConfirmation an alle Clients
+        public async Task BroadcastRoundReadyRequest(int round)
+        {
+            var msg = new { type = "RoundReadyRequest", round };
+            await BroadcastAsync(msg);
+        }
+
+        // Client: Sende RoundReadyConfirmation zurück an Host
+        public async Task SendRoundReadyConfirmation(int round)
+        {
+            var msg = new { type = "RoundReadyConfirmation", round };
+            await SendToHostAsync(msg);
+        }
+
+        // Host: Empfange RoundReadyConfirmation von einem Client
+        public Task<RoundReadyMsg?> ReceiveRoundReadyConfirmationAsync(CancellationToken cancellationToken, int timeoutMs = 1000)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            
+            while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+            {
+                if (_placedPieceQueue.TryDequeue(out var placedMsg))
+                {
+                    // Wrong queue, put it back - this should not happen
+                    _placedPieceQueue.Enqueue(placedMsg);
+                    continue;
+                }
+                
+                // Check in individual client streams
+                foreach (var kvp in _playerClients)
+                {
+                    var playerId = kvp.Key;
+                    var client = kvp.Value;
+                    
+                    try
+                    {
+                        if (!client.Connected) continue;
+                        var stream = client.GetStream();
+                        if (!stream.DataAvailable) continue;
+                        
+                        var msg = ReadFramedJsonAsync(stream, cancellationToken).Result;
+                        if (msg == null) continue;
+                        
+                        var element = msg.Value;
+                        if (element.TryGetProperty("type", out var typeProp) && 
+                            typeProp.GetString() == "RoundReadyConfirmation" &&
+                            element.TryGetProperty("round", out var roundProp) &&
+                            roundProp.TryGetInt32(out int confirmedRound))
+                        {
+                            return Task.FromResult<RoundReadyMsg?>(new RoundReadyMsg 
+                            { 
+                                PlayerId = playerId,
+                                Round = confirmedRound
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogDebugToFile($"Error reading round ready confirmation from {playerId}: {ex.Message}");
+                    }
+                }
+                
+                Thread.Sleep(10); // Kurze Pause
+            }
+            
+            return Task.FromResult<RoundReadyMsg?>(null);
+        }
+
+        // Client: Empfange RoundReadyRequest vom Host
+        public Task<int?> ReceiveRoundReadyRequestAsync(CancellationToken cancellationToken)
+        {
+            lock (_queueLock)
+            {
+                var tempQueue = new Queue<JsonElement>();
+                while (_clientMessageQueue.Count > 0)
+                {
+                    var queuedElement = _clientMessageQueue.Dequeue();
+                    if (queuedElement.TryGetProperty("type", out var qTypeProp) && qTypeProp.GetString() == "RoundReadyRequest")
+                    {
+                        // Put back remaining messages
+                        while (tempQueue.Count > 0)
+                            _clientMessageQueue.Enqueue(tempQueue.Dequeue());
+                        
+                        if (queuedElement.TryGetProperty("round", out var roundProp) && roundProp.TryGetInt32(out int round))
+                        {
+                            return Task.FromResult<int?>(round);
+                        }
+                    }
+                    tempQueue.Enqueue(queuedElement);
+                }
+                // Put back all messages
+                while (tempQueue.Count > 0)
+                    _clientMessageQueue.Enqueue(tempQueue.Dequeue());
+            }
+            return Task.FromResult<int?>(null);
+        }
+
+        // Data structure for round ready confirmations
+        public class RoundReadyMsg
+        {
+            public string PlayerId { get; set; } = "";
+            public int Round { get; set; }
         }
     }
 }
