@@ -76,10 +76,10 @@ namespace TetrisMultiplayer.Tests
         }
         
         [Fact]
-        public void BroadcastRealtimeLeaderboard_ShouldHaveContinuousLoop()
+        public void BroadcastRealtimeLeaderboard_DataStructure_ShouldBeCorrect()
         {
-            // This test verifies that the BroadcastRealtimeLeaderboard function structure
-            // has been fixed to include a continuous broadcasting loop
+            // This test verifies that the BroadcastRealtimeLeaderboard function 
+            // creates the correct data structure for broadcasting
             
             // Test data structures used in BroadcastRealtimeLeaderboard
             var scores = new Dictionary<string, int> { ["player1"] = 100, ["player2"] = 200 };

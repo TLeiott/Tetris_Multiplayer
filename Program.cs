@@ -1216,78 +1216,42 @@ namespace TetrisMultiplayer
 
         public static async Task BroadcastRealtimeLeaderboard(NetworkManager network, Dictionary<string, int> scores, Dictionary<string, int> hps, HashSet<string> spectators, Dictionary<string, string> playerNames, HashSet<string> playersWhoPlaced, CancellationToken cancellationToken)
         {
-            while (!cancellationToken.IsCancellationRequested)
+            // Send ALL players, not just top 3, to fix the "some players only see themselves" issue
+            var allPlayers = scores.Keys.ToList();
+            
+            // Prepare data in the format expected by ParseLeaderboardUpdate
+            var leaderboardUpdate = new { 
+                type = "LeaderboardUpdate", 
+                scores = scores,                    // Flat scores dictionary
+                hp = hps,                          // Flat hp dictionary  
+                spectators = spectators.ToList(),  // Flat spectators list
+                playerNames = playerNames,          // Player names dictionary
+                playersPlaced = playersWhoPlaced.ToList()
+            };
+            await network.BroadcastAsync(leaderboardUpdate);
+            
+            // Logge ausführliche Informationen zum Leaderboard für alle Spieler
+            foreach (var playerId in allPlayers)
             {
-                try
-                {
-                    // Send ALL players, not just top 3, to fix the "some players only see themselves" issue
-                    var allPlayers = scores.Keys.ToList();
-                    
-                    // Prepare data in the format expected by ParseLeaderboardUpdate
-                    var leaderboardUpdate = new { 
-                        type = "LeaderboardUpdate", 
-                        scores = scores,                    // Flat scores dictionary
-                        hp = hps,                          // Flat hp dictionary  
-                        spectators = spectators.ToList(),  // Flat spectators list
-                        playerNames = playerNames,          // Player names dictionary
-                        playersPlaced = playersWhoPlaced.ToList()
-                    };
-                    await network.BroadcastAsync(leaderboardUpdate);
-                    
-                    // Logge ausführliche Informationen zum Leaderboard für alle Spieler
-                    foreach (var playerId in allPlayers)
-                    {
-                        var status = spectators.Contains(playerId) ? "Spectator" : "Player";
-                        var score = scores.GetValueOrDefault(playerId, 0);
-                        var hp = hps.GetValueOrDefault(playerId, 100);
-                        var placed = playersWhoPlaced.Contains(playerId) ? "PLACED" : "waiting";
-                        GameLogger.LogDebug($"[Leaderboard] {status} {playerId}: Score={score}, HP={hp}, Status={placed}");
-                    }
-                    
-                    // Broadcast leaderboard updates every 500ms for real-time updates
-                    await Task.Delay(500, cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    GameLogger.LogError($"Error in BroadcastRealtimeLeaderboard: {ex.Message}");
-                    await Task.Delay(1000, cancellationToken); // Wait longer on error
-                }
+                var status = spectators.Contains(playerId) ? "Spectator" : "Player";
+                var score = scores.GetValueOrDefault(playerId, 0);
+                var hp = hps.GetValueOrDefault(playerId, 100);
+                var placed = playersWhoPlaced.Contains(playerId) ? "PLACED" : "waiting";
+                GameLogger.LogDebug($"[Leaderboard] {status} {playerId}: Score={score}, HP={hp}, Status={placed}");
             }
         }
 
         public static async Task BroadcastSpectatorSnapshots(NetworkManager network, Dictionary<string, TetrisMultiplayer.Game.TetrisEngine> fields, Dictionary<string, int> scores, Dictionary<string, int> hps, HashSet<string> spectators, CancellationToken cancellationToken)
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    var snapshot = new {
-                        Fields = fields.ToDictionary(kv => kv.Key, kv => ConvertToJaggedArray(kv.Value.GetGameField())),
-                        Scores = scores,
-                        Hp = hps,
-                        Spectators = spectators.ToList()
-                    };
-                    
-                    var snapshotMessage = new { type = "SpectatorSnapshot", snapshot };
-                    await network.BroadcastAsync(snapshotMessage);
-                    
-                    // Broadcast spectator snapshots every 200ms for smooth updates
-                    await Task.Delay(200, cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    GameLogger.LogError($"Error in BroadcastSpectatorSnapshots: {ex.Message}");
-                    await Task.Delay(1000, cancellationToken); // Wait longer on error
-                }
-            }
+            var snapshot = new {
+                Fields = fields.ToDictionary(kv => kv.Key, kv => ConvertToJaggedArray(kv.Value.GetGameField())),
+                Scores = scores,
+                Hp = hps,
+                Spectators = spectators.ToList()
+            };
+            
+            var snapshotMessage = new { type = "SpectatorSnapshot", snapshot };
+            await network.BroadcastAsync(snapshotMessage);
         }
 
         public static int[][] ConvertToJaggedArray(int[,] array2D)
