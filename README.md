@@ -2,14 +2,15 @@
 
 A simple console-based multiplayer Tetris prototype with host/client, synchronized pieces, HP elimination, spectator mode, and a lobby sandbox.
 
-## How to run (Windows PowerShell)
+## How to run
 
 Open two terminals/windows:
 
 1) Host
 
-```powershell
-cd c:\Users\timle\source\repos\TLeiott\Playground\TetrisMultiplayer\TetrisMultiplayer
+```bash
+# Navigate to the project directory
+cd path/to/TetrisMultiplayer
 dotnet run
 ```
 - Choose H
@@ -17,8 +18,9 @@ dotnet run
 
 2) Client(s)
 
-```powershell
-cd c:\Users\timle\source\repos\TLeiott\Playground\TetrisMultiplayer\TetrisMultiplayer
+```bash
+# Navigate to the project directory  
+cd path/to/TetrisMultiplayer
 dotnet run
 ```
 - Choose C
