@@ -227,13 +227,15 @@ namespace TetrisMultiplayer
 
         static async Task RunHostAsync(ILogger logger, string playerName)
         {
-            var network = new NetworkManager();
+            using var network = new NetworkManager();
             int port = 5000;
             var cts = new CancellationTokenSource();
             
-            // Start host immediately - don't let diagnostics prevent startup
-            Console.WriteLine("Starting host...");
-            await network.StartHostWithDiscovery(port, playerName, cts.Token);
+            try
+            {
+                // Start host immediately - don't let diagnostics prevent startup
+                Console.WriteLine("Starting host...");
+                await network.StartHostWithDiscovery(port, playerName, cts.Token);
 
             // GameManager mit Seed erzeugen
             var gameManager = new TetrisMultiplayer.Game.GameManager();
@@ -364,10 +366,31 @@ namespace TetrisMultiplayer
                     {
                         cts.Cancel();
                         network.StopLobbyBroadcast();
+                        network.Dispose(); // Properly cleanup network resources
                         break;
                     }
                 }
                 await Task.Delay(1000); // Short delay to allow lobby refresh
+            }
+            }
+            catch (InvalidOperationException ex)
+            {
+                logger.LogError($"Host startup failed: {ex.Message}");
+                Console.WriteLine($"Failed to start host: {ex.Message}");
+                Console.WriteLine("This usually means the port is already in use. Please:");
+                Console.WriteLine("1. Close any existing host instances");
+                Console.WriteLine("2. Wait a moment for cleanup to complete");
+                Console.WriteLine("3. Check if another application is using port 5000");
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Unexpected error in host: {ex.Message}");
+                Console.WriteLine($"Unexpected error: {ex.Message}");
+            }
+            finally
+            {
+                cts.Cancel();
+                // NetworkManager will be disposed automatically due to 'using' statement
             }
         }
 

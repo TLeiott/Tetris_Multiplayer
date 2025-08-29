@@ -14,7 +14,7 @@ using System.Text.Json.Serialization;
 
 namespace TetrisMultiplayer.Networking
 {
-    public class NetworkManager
+    public class NetworkManager : IDisposable
     {
         private TcpListener? _listener;
         private readonly List<TcpClient> _clients = new();
@@ -53,11 +53,30 @@ namespace TetrisMultiplayer.Networking
 
         public async Task StartHost(int port, CancellationToken cancellationToken = default)
         {
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
-            Console.WriteLine($"Host lauscht auf Port {port}...");
-            _ = AcceptClientsAsync(_listener, cancellationToken); // Fire-and-forget, nicht awaiten!
-            await Task.CompletedTask; // sofort zurückkehren, damit Lobby angezeigt wird
+            try
+            {
+                _listener = new TcpListener(IPAddress.Any, port);
+                // Enable socket reuse to prevent "Address already in use" errors
+                _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _listener.Start();
+                Console.WriteLine($"Host lauscht auf Port {port}...");
+                LogDebugToFile($"TCP Listener successfully started on port {port}");
+                _ = AcceptClientsAsync(_listener, cancellationToken); // Fire-and-forget, nicht awaiten!
+                await Task.CompletedTask; // sofort zurückkehren, damit Lobby angezeigt wird
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                var errorMsg = $"Port {port} is already in use. Please close any existing host instances or wait a moment for cleanup.";
+                LogDebugToFile($"Socket binding error: {errorMsg}");
+                Console.WriteLine($"Error: {errorMsg}");
+                throw new InvalidOperationException(errorMsg, ex);
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error starting host on port {port}: {ex.Message}");
+                Console.WriteLine($"Error starting host: {ex.Message}");
+                throw;
+            }
         }
 
         // Host: Startet Host mit Lobby-Broadcasting
@@ -1388,6 +1407,53 @@ namespace TetrisMultiplayer.Networking
             var result = info.ToString();
             LogDebugToFile(result);
             return result;
+        }
+
+        // Cleanup method to properly dispose of network resources
+        public void Dispose()
+        {
+            try
+            {
+                LogDebugToFile("Starting NetworkManager cleanup...");
+                
+                // Stop client receive loop
+                _clientReceiveCts?.Cancel();
+                _clientReceiveTask?.Wait(1000);
+                _clientReceiveCts?.Dispose();
+                
+                // Close client connection
+                _clientStream?.Close();
+                _clientStream?.Dispose();
+                
+                // Close all client connections
+                foreach (var kvp in _playerClients)
+                {
+                    try
+                    {
+                        kvp.Value?.Close();
+                        kvp.Value?.Dispose();
+                    }
+                    catch { }
+                }
+                _playerClients.Clear();
+                
+                // Stop TCP listener
+                if (_listener != null)
+                {
+                    _listener.Stop();
+                    _listener = null;
+                    LogDebugToFile("TCP Listener stopped and disposed");
+                }
+                
+                // Stop lobby discovery
+                StopLobbyBroadcast();
+                
+                LogDebugToFile("NetworkManager cleanup completed");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error during NetworkManager cleanup: {ex.Message}");
+            }
         }
     }
 }
