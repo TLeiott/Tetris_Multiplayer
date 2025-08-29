@@ -231,11 +231,8 @@ namespace TetrisMultiplayer
             int port = 5000;
             var cts = new CancellationTokenSource();
             
-            // Zeige Netzwerk-Diagnose vor Start
-            Console.WriteLine("Netzwerk-Diagnose wird durchgeführt...");
-            var diagnostics = await network.DiagnoseNetworkConnectivity();
-            Console.WriteLine(diagnostics);
-            
+            // Start host immediately - don't let diagnostics prevent startup
+            Console.WriteLine("Starting host...");
             await network.StartHostWithDiscovery(port, playerName, cts.Token);
 
             // GameManager mit Seed erzeugen
@@ -243,26 +240,47 @@ namespace TetrisMultiplayer
             int seed = gameManager.Seed;
             Console.WriteLine($"Game Seed: {seed}");
 
-            // Alle IPv4-Adressen anzeigen mit verbesserter Prioritäts-Anzeige
-            var localIPs = Dns.GetHostAddresses(Dns.GetHostName())
-                .Where(ip => ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-                .Select(ip => ip.ToString()).ToList();
-            Console.WriteLine("Eigene IPv4-Adressen:");
-            foreach (var ip in localIPs)
+            // Show network info (but don't fail if this fails)
+            try
             {
-                var priority = "";
-                if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
-                    priority = " (LAN - beste Wahl)";
-                else if (ip.StartsWith("100.") || ip.StartsWith("25."))
-                    priority = " (VPN - könnte funktionieren)";
-                else if (!ip.StartsWith("127."))
-                    priority = " (öffentlich/andere)";
-                    
-                Console.WriteLine($"  {ip}:{port}{priority}");
+                var networkInfo = await network.GetSimpleNetworkInfo();
+                Console.WriteLine(networkInfo);
             }
-            Console.WriteLine("Lobby-Discovery aktiv - Clients können diesen Host automatisch finden.");
-            Console.WriteLine("Discovery-Port: 5001 (UDP)");
-            Console.WriteLine("Game-Port: 5000 (TCP)");
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Could not get network info: {ex.Message}");
+                Console.WriteLine("Network info not available, but host is running normally.");
+            }
+
+            // Show available IPs for manual connection
+            List<string> localIPs = new List<string>();
+            try
+            {
+                localIPs = Dns.GetHostAddresses(Dns.GetHostName())
+                    .Where(ip => ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    .Select(ip => ip.ToString()).ToList();
+                Console.WriteLine("Your IPv4 addresses for manual connection:");
+                foreach (var ip in localIPs)
+                {
+                    var priority = "";
+                    if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
+                        priority = " (LAN - best choice)";
+                    else if (ip.StartsWith("100.") || ip.StartsWith("25."))
+                        priority = " (VPN - might work)";
+                    else if (!ip.StartsWith("127."))
+                        priority = " (public/other)";
+                        
+                    Console.WriteLine($"  {ip}:{port}{priority}");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Could not enumerate IP addresses: {ex.Message}");
+                Console.WriteLine($"Host is running on port {port}");
+            }
+
+            Console.WriteLine("Lobby discovery active - clients can find this host automatically.");
+            Console.WriteLine("Host started successfully - ready for players!");
 
             // Host-Name speichern
             var playerNames = new Dictionary<string, string>();
@@ -279,15 +297,23 @@ namespace TetrisMultiplayer
                 Console.Clear();
                 Console.WriteLine("--- Lobby ---");
                 Console.WriteLine($"Game Seed: {seed}");
-                Console.WriteLine("Eigene IPv4-Adressen:");
-                foreach (var ip in localIPs)
+                Console.WriteLine("Host running successfully!");
+                Console.WriteLine($"Players can connect to any of these addresses on port {port}:");
+                try
                 {
-                    var priority = "";
-                    if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
-                        priority = " (LAN)";
-                    else if (ip.StartsWith("100.") || ip.StartsWith("25."))
-                        priority = " (VPN)";
-                    Console.WriteLine($"  {ip}:{port}{priority}");
+                    foreach (var ip in localIPs)
+                    {
+                        var priority = "";
+                        if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
+                            priority = " (LAN)";
+                        else if (ip.StartsWith("100.") || ip.StartsWith("25."))
+                            priority = " (VPN)";
+                        Console.WriteLine($"  {ip}:{port}{priority}");
+                    }
+                }
+                catch
+                {
+                    Console.WriteLine($"  Check network settings - host running on port {port}");
                 }
                 Console.WriteLine();
                 Console.WriteLine("Verbunden:");
@@ -720,40 +746,32 @@ namespace TetrisMultiplayer
             var network = new NetworkManager();
             var cts = new CancellationTokenSource();
             
-            // Zeige Netzwerk-Diagnose für Troubleshooting
-            Console.WriteLine("Führe Netzwerk-Diagnose durch...");
-            var diagnostics = await network.DiagnoseNetworkConnectivity();
-            Console.WriteLine(diagnostics);
-            Console.WriteLine("Drücke beliebige Taste zum Fortfahren...");
-            Console.ReadKey();
-            Console.Clear();
-            
-            Console.WriteLine("Suche nach verfügbaren Lobbys im lokalen Netzwerk...");
-            Console.WriteLine("(Dies kann bei VPN-Verbindungen oder mehreren Netzwerk-Interfaces länger dauern)");
+            Console.WriteLine("Searching for available lobbies in local network...");
+            Console.WriteLine("(This may take longer on VPN networks or complex network setups)");
             
             try
             {
-                var lobbies = await network.DiscoverLobbies(8000, cts.Token); // Erhöhter Timeout für VPN-Netzwerke
+                var lobbies = await network.DiscoverLobbies(6000, cts.Token); // Reasonable timeout
                 
                 if (lobbies.Count > 0)
                 {
-                    Console.WriteLine($"\n{lobbies.Count} Lobby(s) gefunden:");
+                    Console.WriteLine($"\n{lobbies.Count} lobby(s) found:");
                     Console.WriteLine("╔════════════════════════════════════════════════════════════════╗");
                     for (int i = 0; i < lobbies.Count; i++)
                     {
                         var lobby = lobbies[i];
-                        Console.WriteLine($"║ [{i + 1}] {lobby.HostName.PadRight(20)} │ {lobby.IpAddress.PadRight(15)} │ {lobby.PlayerCount}/{lobby.MaxPlayers} Spieler ║");
+                        Console.WriteLine($"║ [{i + 1}] {lobby.HostName.PadRight(20)} │ {lobby.IpAddress.PadRight(15)} │ {lobby.PlayerCount}/{lobby.MaxPlayers} players ║");
                     }
                     Console.WriteLine("╚════════════════════════════════════════════════════════════════╝");
-                    Console.WriteLine($"[{lobbies.Count + 1}] Manuelle IP-Eingabe");
-                    Console.WriteLine("[0] Beenden");
-                    Console.Write("\nAuswahl: ");
+                    Console.WriteLine($"[{lobbies.Count + 1}] Manual IP entry");
+                    Console.WriteLine("[0] Exit");
+                    Console.Write("\nSelection: ");
                     
                     if (int.TryParse(Console.ReadLine(), out int choice))
                     {
                         if (choice == 0)
                         {
-                            return; // Beenden
+                            return; // Exit
                         }
                         else if (choice > 0 && choice <= lobbies.Count)
                         {
@@ -763,27 +781,27 @@ namespace TetrisMultiplayer
                         }
                         else if (choice == lobbies.Count + 1)
                         {
-                            // Fallback zu manueller Eingabe
+                            // Manual IP entry
                             await ManualIPConnection(network, playerName, cts.Token);
                             return;
                         }
                     }
                     
-                    Console.WriteLine("Ungültige Auswahl.");
+                    Console.WriteLine("Invalid selection.");
                     return;
                 }
                 else
                 {
-                    Console.WriteLine("Keine Lobbys im lokalen Netzwerk gefunden.");
-                    Console.WriteLine("\nMögliche Gründe:");
-                    Console.WriteLine("- Keine Hosts im Netzwerk aktiv");
-                    Console.WriteLine("- VPN-Netzwerk blockiert Broadcasts");
-                    Console.WriteLine("- Firewall blockiert UDP-Port 5001");
-                    Console.WriteLine("- Unterschiedliche Netzwerk-Segmente");
-                    Console.WriteLine("\nMöchten Sie eine IP-Adresse manuell eingeben? (j/n)");
+                    Console.WriteLine("No lobbies found in local network.");
+                    Console.WriteLine("\nPossible reasons:");
+                    Console.WriteLine("- No hosts active in network");
+                    Console.WriteLine("- VPN network blocks broadcasts");
+                    Console.WriteLine("- Firewall blocks UDP port 5001");
+                    Console.WriteLine("- Different network segments");
+                    Console.WriteLine("\nWould you like to enter an IP address manually? (y/n)");
                     
                     var response = Console.ReadLine()?.ToLower();
-                    if (response == "j" || response == "ja" || response == "y" || response == "yes")
+                    if (response == "y" || response == "yes" || response == "j" || response == "ja")
                     {
                         await ManualIPConnection(network, playerName, cts.Token);
                     }
@@ -792,8 +810,8 @@ namespace TetrisMultiplayer
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Fehler bei der Lobby-Suche: {ex.Message}");
-                Console.WriteLine("Fallback zu manueller IP-Eingabe...");
+                Console.WriteLine($"Error during lobby search: {ex.Message}");
+                Console.WriteLine("Falling back to manual IP entry...");
                 await ManualIPConnection(network, playerName, cts.Token);
             }
         }

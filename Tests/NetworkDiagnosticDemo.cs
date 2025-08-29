@@ -14,8 +14,8 @@ namespace TetrisMultiplayer.Tests
             
             try
             {
-                var diagnostics = await network.DiagnoseNetworkConnectivity();
-                Console.WriteLine(diagnostics);
+                var info = await network.GetSimpleNetworkInfo();
+                Console.WriteLine(info);
                 
                 Console.WriteLine("\n=== Testing Discovery ===");
                 var lobbies = await network.DiscoverLobbies(3000);

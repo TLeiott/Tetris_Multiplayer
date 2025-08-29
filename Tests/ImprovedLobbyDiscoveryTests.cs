@@ -9,17 +9,16 @@ namespace TetrisMultiplayer.Tests
     public class ImprovedLobbyDiscoveryTests
     {
         [Fact]
-        public async Task NetworkDiagnostics_ShouldShowLocalInterfaces()
+        public async Task NetworkInfo_ShouldShowLocalAddresses()
         {
             var network = new NetworkManager();
             
-            var diagnostics = await network.DiagnoseNetworkConnectivity();
+            var info = await network.GetSimpleNetworkInfo();
             
-            Assert.NotNull(diagnostics);
-            Assert.Contains("=== NETZWERK-DIAGNOSE ===", diagnostics);
-            Assert.Contains("Lokale IP-Adressen", diagnostics);
-            Assert.Contains("Netzwerk-Interfaces", diagnostics);
-            Assert.Contains("Broadcast-Ziele", diagnostics);
+            Assert.NotNull(info);
+            Assert.Contains("=== Network Information ===", info);
+            Assert.Contains("Available IP addresses", info);
+            Assert.Contains("Discovery port", info);
         }
 
         [Fact]
@@ -61,11 +60,11 @@ namespace TetrisMultiplayer.Tests
         {
             var network = new NetworkManager();
             
-            // Test the network diagnostic functionality
-            var diagnostics = await network.DiagnoseNetworkConnectivity();
+            // Test the network info functionality
+            var info = await network.GetSimpleNetworkInfo();
             
-            // Verify that the diagnostics include various network types
-            Assert.Contains("IP-Adressen", diagnostics);
+            // Verify that the info includes IP addresses
+            Assert.Contains("IP addresses", info);
             
             // Test discovery on potentially complex network setup
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -89,15 +88,15 @@ namespace TetrisMultiplayer.Tests
         }
 
         [Fact]
-        public async Task BroadcastTargets_ShouldIncludeMultipleSegments()
+        public async Task NetworkInfo_ShouldIncludeDiscoveryPort()
         {
             var network = new NetworkManager();
             
-            // This tests internal logic by running diagnostics
-            var diagnostics = await network.DiagnoseNetworkConnectivity();
+            // This tests network info functionality
+            var info = await network.GetSimpleNetworkInfo();
             
-            // Should include broadcast information
-            Assert.Contains("Broadcast-Ziele", diagnostics);
+            // Should include discovery port information
+            Assert.Contains("Discovery port", info);
         }
     }
 }

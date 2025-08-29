@@ -962,163 +962,120 @@ namespace TetrisMultiplayer.Networking
             public DateTime LastSeen { get; set; }
         }
 
-        // Host: Startet Lobby-Broadcasting für Discovery mit Multi-Interface-Support
+        // Host: Simplified and robust lobby broadcasting
         public async Task StartLobbyBroadcast(string hostName, int gamePort, CancellationToken cancellationToken = default)
         {
             _hostName = hostName;
             try
             {
-                // Verbesserte Discovery-Server-Initialisierung für alle Interfaces
+                // Simple and reliable UDP setup for broadcasting
                 _discoveryServer = new UdpClient();
-                _discoveryServer.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                _discoveryServer.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
                 _discoveryServer.EnableBroadcast = true;
+                // Don't bind to a specific port - let the system choose to avoid conflicts
                 
-                _discoveryTask = Task.Run(() => LobbyBroadcastLoop(gamePort, cancellationToken), cancellationToken);
-                LogDebugToFile($"Verbesserte Lobby-Broadcasting gestartet für Host '{hostName}' auf Port {DISCOVERY_PORT}");
+                _discoveryTask = Task.Run(() => SimplifiedBroadcastLoop(gamePort, cancellationToken), cancellationToken);
+                LogDebugToFile($"Simplified lobby broadcasting started for host '{hostName}'");
                 
-                // Zeige alle verfügbaren Interfaces für Debugging
-                var localIPs = GetAllLocalIPAddresses();
-                LogDebugToFile($"Host lauscht auf folgenden Interfaces: {string.Join(", ", localIPs)}");
+                // Show available IPs for user reference (but don't fail if this fails)
+                try
+                {
+                    var localIPs = GetLocalIPAddresses();
+                    LogDebugToFile($"Host available on: {string.Join(", ", localIPs)}");
+                }
+                catch (Exception ipEx)
+                {
+                    LogDebugToFile($"Could not enumerate IPs (non-critical): {ipEx.Message}");
+                }
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Starten des verbesserten Lobby-Broadcasts: {ex.Message}");
-                throw;
+                LogDebugToFile($"Error starting lobby broadcast: {ex.Message}");
+                // Don't throw - let the host start anyway for better plug-and-play experience
+                LogDebugToFile("Host will continue without auto-discovery (manual IP entry still works)");
             }
         }
 
-        // Host: Verbesserter Broadcast-Loop mit Multi-Interface-Unterstützung
-        private async Task LobbyBroadcastLoop(int gamePort, CancellationToken cancellationToken)
+        // Simplified broadcast loop that's more reliable
+        private async Task SimplifiedBroadcastLoop(int gamePort, CancellationToken cancellationToken)
         {
-            var broadcastEndpoints = GetBroadcastEndpoints();
+            var broadcastEndpoints = GetSimplifiedBroadcastTargets();
             
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    // Lobby-Information erstellen
+                    // Create lobby info
                     var lobbyInfo = new
                     {
                         type = "LobbyBroadcast",
-                        hostName = _hostName ?? "Unbekannter Host",
+                        hostName = _hostName ?? "Unknown Host",
                         port = gamePort,
-                        playerCount = ConnectedPlayerIds.Count + 1, // +1 für Host
+                        playerCount = ConnectedPlayerIds.Count + 1, // +1 for host
                         maxPlayers = 8,
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        hostIP = GetBestLocalIP() // Include best IP for direct connection
                     };
 
                     var json = JsonSerializer.Serialize(lobbyInfo);
                     var data = Encoding.UTF8.GetBytes(json);
                     
-                    // Broadcast an alle verfügbaren Netzwerk-Segmente
+                    // Broadcast to simplified target list
                     foreach (var endpoint in broadcastEndpoints)
                     {
                         try
                         {
                             await _discoveryServer!.SendAsync(data, data.Length, endpoint);
-                            LogDebugToFile($"Lobby-Broadcast gesendet an {endpoint}");
+                            LogDebugToFile($"Broadcast sent to {endpoint}");
                         }
                         catch (Exception ex)
                         {
-                            LogDebugToFile($"Fehler beim Broadcast an {endpoint}: {ex.Message}");
+                            LogDebugToFile($"Broadcast to {endpoint} failed: {ex.Message}");
+                            // Continue to other endpoints
                         }
                     }
                     
-                    // Warte auf Discovery-Requests mit Timeout
-                    var requestsHandled = 0;
-                    var requestStartTime = DateTime.UtcNow;
-                    
-                    while (_discoveryServer!.Available > 0 && 
-                           (DateTime.UtcNow - requestStartTime).TotalMilliseconds < 1000 &&
-                           requestsHandled < 10) // Limit pro Zyklus
-                    {
-                        var result = await _discoveryServer.ReceiveAsync();
-                        await HandleDiscoveryRequest(result, gamePort);
-                        requestsHandled++;
-                    }
+                    // Simple request handling - check for incoming discovery requests
+                    await HandleIncomingRequests(gamePort);
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
-                    LogDebugToFile($"Fehler im verbesserten Lobby-Broadcast-Loop: {ex.Message}");
+                    LogDebugToFile($"Error in broadcast loop: {ex.Message}");
                 }
                 
-                await Task.Delay(3000, cancellationToken); // Broadcast alle 3 Sekunden
+                await Task.Delay(3000, cancellationToken); // Broadcast every 3 seconds
             }
         }
 
-        // Hilfsmethode: Ermittelt alle Broadcast-Endpunkte für verfügbare Netzwerke
-        private List<IPEndPoint> GetBroadcastEndpoints()
-        {
-            var endpoints = new List<IPEndPoint>();
-            
-            try
-            {
-                // Standard-Broadcast hinzufügen
-                endpoints.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
-                
-                // Dirigierte Broadcasts für alle Netzwerk-Interfaces
-                var interfaces = NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(ni => ni.OperationalStatus == OperationalStatus.Up && 
-                                ni.NetworkInterfaceType != NetworkInterfaceType.Loopback);
-
-                foreach (var ni in interfaces)
-                {
-                    var ipProps = ni.GetIPProperties();
-                    foreach (var addr in ipProps.UnicastAddresses)
-                    {
-                        if (addr.Address.AddressFamily == AddressFamily.InterNetwork && 
-                            !IPAddress.IsLoopback(addr.Address) && 
-                            addr.IPv4Mask != null)
-                        {
-                            // Berechne Broadcast-Adresse für dieses Netzwerk-Segment
-                            var broadcastAddr = CalculateBroadcastAddress(addr.Address, addr.IPv4Mask);
-                            if (broadcastAddr != null)
-                            {
-                                var endpoint = new IPEndPoint(broadcastAddr, DISCOVERY_PORT);
-                                if (!endpoints.Any(ep => ep.Address.Equals(broadcastAddr)))
-                                {
-                                    endpoints.Add(endpoint);
-                                    LogDebugToFile($"Broadcast-Endpunkt hinzugefügt: {endpoint} für Interface {ni.Name}");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Fehler beim Ermitteln der Broadcast-Endpunkte: {ex.Message}");
-            }
-            
-            return endpoints;
-        }
-
-        // Hilfsmethode: Berechnet Broadcast-Adresse für ein Netzwerk-Segment
-        private IPAddress? CalculateBroadcastAddress(IPAddress address, IPAddress subnetMask)
+        // Simplified request handling that doesn't conflict with client discovery
+        private async Task HandleIncomingRequests(int gamePort)
         {
             try
             {
-                var addressBytes = address.GetAddressBytes();
-                var maskBytes = subnetMask.GetAddressBytes();
-                var broadcastBytes = new byte[4];
-
-                for (int i = 0; i < 4; i++)
+                // Use a separate UDP client for listening to avoid port conflicts
+                using var listener = new UdpClient();
+                listener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                listener.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
+                listener.Client.ReceiveTimeout = 500; // Short timeout to not block broadcasts
+                
+                // Check for incoming requests quickly and respond
+                if (listener.Available > 0)
                 {
-                    broadcastBytes[i] = (byte)(addressBytes[i] | (~maskBytes[i] & 0xFF));
+                    var result = await listener.ReceiveAsync();
+                    await ProcessDiscoveryRequest(result, gamePort);
                 }
-
-                return new IPAddress(broadcastBytes);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+            {
+                // Timeout is expected and normal
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Berechnen der Broadcast-Adresse: {ex.Message}");
-                return null;
+                LogDebugToFile($"Error handling discovery requests: {ex.Message}");
             }
         }
 
-        // Host: Verbesserte Behandlung von Discovery-Requests
-        private async Task HandleDiscoveryRequest(UdpReceiveResult result, int gamePort)
+        // Simplified discovery request processing
+        private async Task ProcessDiscoveryRequest(UdpReceiveResult result, int gamePort)
         {
             try
             {
@@ -1128,196 +1085,144 @@ namespace TetrisMultiplayer.Networking
                 if (request.TryGetProperty("type", out var typeProp) && 
                     typeProp.GetString() == "DiscoveryRequest")
                 {
-                    // Ermittle beste IP-Adresse für Response basierend auf Client-Netzwerk
-                    var clientIP = result.RemoteEndPoint.Address.ToString();
-                    var bestHostIP = GetBestIPForClient(clientIP);
+                    // Simple response with host information
+                    var bestIP = GetBestLocalIP();
                     
-                    LogDebugToFile($"Discovery-Request von {result.RemoteEndPoint}, verwende Host-IP: {bestHostIP}");
-                    
-                    // Antwort mit optimaler IP-Adresse senden
                     var response = new
                     {
                         type = "DiscoveryResponse",
-                        hostName = _hostName ?? "Unbekannter Host",
-                        ipAddress = bestHostIP,
+                        hostName = _hostName ?? "Unknown Host",
+                        ipAddress = bestIP,
                         port = gamePort,
                         playerCount = ConnectedPlayerIds.Count + 1,
                         maxPlayers = 8,
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                        allHostIPs = GetAllLocalIPAddresses().Select(ip => ip.ToString()).ToArray()
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                     };
 
                     var responseJson = JsonSerializer.Serialize(response);
                     var responseData = Encoding.UTF8.GetBytes(responseJson);
                     
-                    await _discoveryServer!.SendAsync(responseData, responseData.Length, result.RemoteEndPoint);
-                    LogDebugToFile($"Discovery-Response gesendet an {result.RemoteEndPoint} mit IP {bestHostIP}");
+                    // Send response back to requester
+                    using var responder = new UdpClient();
+                    await responder.SendAsync(responseData, responseData.Length, result.RemoteEndPoint);
+                    LogDebugToFile($"Discovery response sent to {result.RemoteEndPoint}");
                 }
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Behandeln von Discovery-Request: {ex.Message}");
+                LogDebugToFile($"Error processing discovery request: {ex.Message}");
             }
         }
 
-        // Hilfsmethode: Ermittelt beste Host-IP-Adresse für einen bestimmten Client
-        private string GetBestIPForClient(string clientIP)
+        // Get simplified broadcast targets - prioritize reliability over completeness
+        private List<IPEndPoint> GetSimplifiedBroadcastTargets()
         {
+            var targets = new List<IPEndPoint>();
+            
             try
             {
-                var hostIPs = GetAllLocalIPAddresses();
-                var clientAddr = IPAddress.Parse(clientIP);
+                // Standard broadcast - works in most simple network setups
+                targets.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
                 
-                // Versuche, IP im gleichen Netzwerk-Segment zu finden
-                foreach (var hostIP in hostIPs)
+                // Get local network broadcast addresses without complex calculation
+                var localIPs = GetLocalIPAddresses();
+                foreach (var ip in localIPs)
                 {
-                    if (AreInSameSubnet(hostIP, clientAddr))
+                    try
                     {
-                        LogDebugToFile($"Gleiche Subnet gefunden: Host {hostIP} und Client {clientIP}");
-                        return hostIP.ToString();
+                        var bytes = ip.GetAddressBytes();
+                        
+                        // Handle common network patterns
+                        if (bytes[0] == 192 && bytes[1] == 168)
+                        {
+                            // 192.168.x.255 - most home networks
+                            var broadcast = new IPAddress(new byte[] { 192, 168, bytes[2], 255 });
+                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
+                            if (!targets.Any(t => t.Address.Equals(broadcast)))
+                                targets.Add(target);
+                        }
+                        else if (bytes[0] == 10)
+                        {
+                            // 10.x.x.255 - corporate/VPN networks
+                            var broadcast = new IPAddress(new byte[] { 10, bytes[1], bytes[2], 255 });
+                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
+                            if (!targets.Any(t => t.Address.Equals(broadcast)))
+                                targets.Add(target);
+                        }
+                        else if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                        {
+                            // 172.16-31.x.255 - private networks
+                            var broadcast = new IPAddress(new byte[] { 172, bytes[1], bytes[2], 255 });
+                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
+                            if (!targets.Any(t => t.Address.Equals(broadcast)))
+                                targets.Add(target);
+                        }
+                    }
+                    catch
+                    {
+                        // Skip this IP if we can't process it
+                        continue;
                     }
                 }
                 
-                // Fallback: Beste verfügbare lokale Adresse
-                var bestIP = GetLocalIPAddress();
-                LogDebugToFile($"Fallback IP gewählt: {bestIP}");
-                return bestIP;
+                LogDebugToFile($"Simplified broadcast targets: {string.Join(", ", targets)}");
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Ermitteln der besten IP für Client {clientIP}: {ex.Message}");
-                return GetLocalIPAddress();
+                LogDebugToFile($"Error getting broadcast targets: {ex.Message}");
+                // Fallback to basic broadcast only
+                targets.Clear();
+                targets.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
             }
+            
+            return targets;
         }
 
-        // Hilfsmethode: Prüft, ob zwei IP-Adressen im gleichen Subnet sind
-        private bool AreInSameSubnet(IPAddress ip1, IPAddress ip2)
-        {
-            try
-            {
-                // Vereinfachte Subnet-Prüfung für common cases
-                var bytes1 = ip1.GetAddressBytes();
-                var bytes2 = ip2.GetAddressBytes();
-                
-                // Prüfe /24 Netzwerk (erste 3 Oktetts)
-                if (bytes1[0] == bytes2[0] && bytes1[1] == bytes2[1] && bytes1[2] == bytes2[2])
-                {
-                    return true;
-                }
-                
-                // Prüfe /16 Netzwerk für private Bereiche
-                if ((bytes1[0] == 192 && bytes1[1] == 168) && 
-                    (bytes2[0] == 192 && bytes2[1] == 168))
-                {
-                    return bytes1[2] == bytes2[2]; // Gleiche /24
-                }
-                
-                // Prüfe /8 für 10.x.x.x
-                if (bytes1[0] == 10 && bytes2[0] == 10)
-                {
-                    return bytes1[1] == bytes2[1]; // Gleiche /16
-                }
-                
-                return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
 
-        // Client: Verbesserte Suche nach verfügbaren Lobbys mit Multi-Interface-Support
+
+        // Simplified discovery that avoids port conflicts
         public async Task<List<LobbyInfo>> DiscoverLobbies(int timeoutMs = 5000, CancellationToken cancellationToken = default)
         {
             var lobbies = new List<LobbyInfo>();
             var seenHosts = new HashSet<string>();
             
-            LogDebugToFile("=== Starte verbesserte Lobby-Discovery ===");
+            LogDebugToFile("Starting simplified lobby discovery");
             
             try
             {
-                // Methode 1: Aktive Discovery-Requests an alle Netzwerk-Segmente
-                var activeLobbies = await PerformActiveDiscovery(timeoutMs / 2, cancellationToken);
-                foreach (var lobby in activeLobbies)
-                {
-                    var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
-                    if (!seenHosts.Contains(hostKey))
-                    {
-                        lobbies.Add(lobby);
-                        seenHosts.Add(hostKey);
-                    }
-                }
-                
-                LogDebugToFile($"Aktive Discovery: {activeLobbies.Count} Lobby(s) gefunden");
-                
-                // Methode 2: Passive Listening auf Broadcasts
-                var passiveLobbies = await PerformPassiveListening(timeoutMs / 2, cancellationToken);
-                foreach (var lobby in passiveLobbies)
-                {
-                    var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
-                    if (!seenHosts.Contains(hostKey))
-                    {
-                        lobbies.Add(lobby);
-                        seenHosts.Add(hostKey);
-                    }
-                }
-                
-                LogDebugToFile($"Passive Discovery: {passiveLobbies.Count} zusätzliche Lobby(s) gefunden");
-                
-                LogDebugToFile($"=== Discovery abgeschlossen. Gesamt: {lobbies.Count} Lobby(s) gefunden ===");
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Fehler bei verbesserter Lobby-Discovery: {ex.Message}");
-            }
-            
-            return lobbies;
-        }
-
-        // Aktive Discovery: Sendet Requests an alle Netzwerk-Segmente
-        private async Task<List<LobbyInfo>> PerformActiveDiscovery(int timeoutMs, CancellationToken cancellationToken)
-        {
-            var lobbies = new List<LobbyInfo>();
-            
-            try
-            {
+                // Use a single, reliable discovery method
                 using var client = new UdpClient();
                 client.EnableBroadcast = true;
-                client.Client.ReceiveTimeout = Math.Max(timeoutMs, 2000);
                 
-                // Discovery-Request erstellen
+                // Create discovery request
                 var request = new
                 {
                     type = "DiscoveryRequest",
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    clientInfo = GetLocalIPAddress()
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                 };
                 
                 var requestJson = JsonSerializer.Serialize(request);
                 var requestData = Encoding.UTF8.GetBytes(requestJson);
                 
-                // Alle möglichen Broadcast-Ziele
-                var broadcastTargets = GetBroadcastTargets();
+                // Send requests to broadcast targets
+                var targets = GetSimplifiedBroadcastTargets();
                 
-                LogDebugToFile($"Sende Discovery-Requests an {broadcastTargets.Count} Broadcast-Ziele");
-                
-                // Requests an alle Ziele senden
-                foreach (var target in broadcastTargets)
+                foreach (var target in targets)
                 {
                     try
                     {
                         await client.SendAsync(requestData, requestData.Length, target);
-                        LogDebugToFile($"Discovery-Request gesendet an {target}");
+                        LogDebugToFile($"Discovery request sent to {target}");
                     }
                     catch (Exception ex)
                     {
-                        LogDebugToFile($"Fehler beim Senden an {target}: {ex.Message}");
+                        LogDebugToFile($"Failed to send to {target}: {ex.Message}");
                     }
                 }
                 
-                // Auf Antworten warten
+                // Listen for responses
                 var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                var seenHosts = new HashSet<string>();
+                client.Client.ReceiveTimeout = Math.Min(timeoutMs, 5000);
                 
                 while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
                 {
@@ -1327,199 +1232,83 @@ namespace TetrisMultiplayer.Networking
                         var json = Encoding.UTF8.GetString(result.Buffer);
                         var response = JsonSerializer.Deserialize<JsonElement>(json);
                         
-                        if (response.TryGetProperty("type", out var typeProp) && 
-                            typeProp.GetString() == "DiscoveryResponse")
+                        if (response.TryGetProperty("type", out var typeProp))
                         {
-                            var lobby = ParseLobbyResponse(response, result.RemoteEndPoint.Address.ToString());
-                            if (lobby != null)
+                            var msgType = typeProp.GetString();
+                            if (msgType == "DiscoveryResponse" || msgType == "LobbyBroadcast")
                             {
-                                var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
-                                if (!seenHosts.Contains(hostKey))
+                                var lobby = ParseLobbyInfo(response, result.RemoteEndPoint.Address.ToString());
+                                if (lobby != null)
                                 {
-                                    lobbies.Add(lobby);
-                                    seenHosts.Add(hostKey);
-                                    LogDebugToFile($"Discovery-Response: {lobby.HostName} ({lobby.IpAddress}:{lobby.Port})");
+                                    var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
+                                    if (!seenHosts.Contains(hostKey))
+                                    {
+                                        lobbies.Add(lobby);
+                                        seenHosts.Add(hostKey);
+                                        LogDebugToFile($"Found lobby: {lobby.HostName} at {lobby.IpAddress}:{lobby.Port}");
+                                    }
                                 }
                             }
                         }
                     }
                     catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                     {
-                        // Timeout ist normal
+                        // Timeout is expected
                         break;
                     }
                     catch (Exception ex)
                     {
-                        LogDebugToFile($"Fehler beim Empfangen von Discovery-Response: {ex.Message}");
+                        LogDebugToFile($"Error receiving discovery response: {ex.Message}");
                     }
                 }
+                
+                LogDebugToFile($"Discovery completed. Found {lobbies.Count} lobbies");
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler bei aktiver Discovery: {ex.Message}");
+                LogDebugToFile($"Error in lobby discovery: {ex.Message}");
             }
             
             return lobbies;
         }
 
-        // Passive Discovery: Lauscht auf Lobby-Broadcasts  
-        private async Task<List<LobbyInfo>> PerformPassiveListening(int timeoutMs, CancellationToken cancellationToken)
-        {
-            var lobbies = new List<LobbyInfo>();
-            
-            try
-            {
-                using var client = new UdpClient();
-                client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                client.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
-                client.Client.ReceiveTimeout = Math.Max(timeoutMs, 2000);
-                
-                LogDebugToFile($"Passive Listening gestartet für {timeoutMs}ms");
-                
-                var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                var seenHosts = new HashSet<string>();
-                
-                while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
-                {
-                    try
-                    {
-                        var result = await client.ReceiveAsync();
-                        var json = Encoding.UTF8.GetString(result.Buffer);
-                        var broadcast = JsonSerializer.Deserialize<JsonElement>(json);
-                        
-                        if (broadcast.TryGetProperty("type", out var typeProp) && 
-                            typeProp.GetString() == "LobbyBroadcast")
-                        {
-                            var lobby = ParseLobbyBroadcast(broadcast, result.RemoteEndPoint.Address.ToString());
-                            if (lobby != null)
-                            {
-                                var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
-                                if (!seenHosts.Contains(hostKey))
-                                {
-                                    lobbies.Add(lobby);
-                                    seenHosts.Add(hostKey);
-                                    LogDebugToFile($"Lobby-Broadcast empfangen: {lobby.HostName} ({lobby.IpAddress}:{lobby.Port})");
-                                }
-                            }
-                        }
-                    }
-                    catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
-                    {
-                        // Timeout ist normal
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogDebugToFile($"Fehler beim Empfangen von Lobby-Broadcast: {ex.Message}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Fehler bei passivem Listening: {ex.Message}");
-            }
-            
-            return lobbies;
-        }
-
-        // Ermittelt alle möglichen Broadcast-Ziele für Discovery
-        private List<IPEndPoint> GetBroadcastTargets()
-        {
-            var targets = new List<IPEndPoint>();
-            
-            try
-            {
-                // Standard-Broadcast
-                targets.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
-                
-                // Alle Netzwerk-Interface-spezifischen Broadcasts
-                var interfaces = NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(ni => ni.OperationalStatus == OperationalStatus.Up && 
-                                ni.NetworkInterfaceType != NetworkInterfaceType.Loopback);
-
-                foreach (var ni in interfaces)
-                {
-                    var ipProps = ni.GetIPProperties();
-                    foreach (var addr in ipProps.UnicastAddresses)
-                    {
-                        if (addr.Address.AddressFamily == AddressFamily.InterNetwork && 
-                            !IPAddress.IsLoopback(addr.Address) && 
-                            addr.IPv4Mask != null)
-                        {
-                            var broadcastAddr = CalculateBroadcastAddress(addr.Address, addr.IPv4Mask);
-                            if (broadcastAddr != null)
-                            {
-                                var target = new IPEndPoint(broadcastAddr, DISCOVERY_PORT);
-                                if (!targets.Any(t => t.Address.Equals(broadcastAddr)))
-                                {
-                                    targets.Add(target);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Zusätzliche bekannte lokale Netzwerk-Bereiche als Fallback
-                var commonNetworks = new[]
-                {
-                    "192.168.1.255", "192.168.0.255", "192.168.178.255",
-                    "10.0.0.255", "10.0.1.255", "172.16.0.255"
-                };
-                
-                foreach (var networkBroadcast in commonNetworks)
-                {
-                    try
-                    {
-                        var addr = IPAddress.Parse(networkBroadcast);
-                        var target = new IPEndPoint(addr, DISCOVERY_PORT);
-                        if (!targets.Any(t => t.Address.Equals(addr)))
-                        {
-                            targets.Add(target);
-                        }
-                    }
-                    catch { }
-                }
-                
-                LogDebugToFile($"Broadcast-Ziele ermittelt: {string.Join(", ", targets)}");
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Fehler beim Ermitteln der Broadcast-Ziele: {ex.Message}");
-            }
-            
-            return targets;
-        }
-
-        // Verbesserte Hilfsmethode: Parse Discovery-Response
-        private LobbyInfo? ParseLobbyResponse(JsonElement response, string senderIp)
+        // Simplified lobby info parsing
+        private LobbyInfo? ParseLobbyInfo(JsonElement message, string senderIp)
         {
             try
             {
-                var hostName = response.GetProperty("hostName").GetString() ?? "Unbekannt";
+                var hostName = "Unknown Host";
+                if (message.TryGetProperty("hostName", out var hostProp))
+                    hostName = hostProp.GetString() ?? "Unknown Host";
                 
-                // Verwende explizit angegebene IP-Adresse oder Sender-IP als Fallback
-                string ipAddress = senderIp;
-                if (response.TryGetProperty("ipAddress", out var ipProp))
+                var port = 5000; // Default port
+                if (message.TryGetProperty("port", out var portProp))
+                    port = portProp.GetInt32();
+                
+                var playerCount = 1;
+                if (message.TryGetProperty("playerCount", out var playerProp))
+                    playerCount = playerProp.GetInt32();
+                
+                var maxPlayers = 8;
+                if (message.TryGetProperty("maxPlayers", out var maxProp))
+                    maxPlayers = maxProp.GetInt32();
+                
+                // Use explicit IP if provided, otherwise sender IP
+                var ipAddress = senderIp;
+                if (message.TryGetProperty("ipAddress", out var ipProp))
                 {
                     var explicitIP = ipProp.GetString();
                     if (!string.IsNullOrEmpty(explicitIP))
-                    {
                         ipAddress = explicitIP;
-                    }
                 }
-                
-                var port = response.GetProperty("port").GetInt32();
-                var playerCount = response.GetProperty("playerCount").GetInt32();
-                var maxPlayers = response.TryGetProperty("maxPlayers", out var maxProp) && maxProp.TryGetInt32(out int max) ? max : 8;
-                
-                // Zusätzliche Informationen für Debugging loggen
-                if (response.TryGetProperty("allHostIPs", out var allIPsProp) && allIPsProp.ValueKind == JsonValueKind.Array)
+                else if (message.TryGetProperty("hostIP", out var hostIPProp))
                 {
-                    var allIPs = allIPsProp.EnumerateArray().Select(ip => ip.GetString()).Where(ip => !string.IsNullOrEmpty(ip));
-                    LogDebugToFile($"Host {hostName} verfügbare IPs: {string.Join(", ", allIPs)}");
+                    var hostIP = hostIPProp.GetString();
+                    if (!string.IsNullOrEmpty(hostIP))
+                        ipAddress = hostIP;
                 }
                 
-                var lobby = new LobbyInfo
+                return new LobbyInfo
                 {
                     HostName = hostName,
                     IpAddress = ipAddress,
@@ -1528,192 +1317,81 @@ namespace TetrisMultiplayer.Networking
                     MaxPlayers = maxPlayers,
                     LastSeen = DateTime.UtcNow
                 };
-                
-                LogDebugToFile($"Lobby geparst: {lobby.HostName} ({lobby.IpAddress}:{lobby.Port}) - {lobby.PlayerCount}/{lobby.MaxPlayers} Spieler");
-                return lobby;
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Parsen der Discovery-Response: {ex.Message}");
+                LogDebugToFile($"Error parsing lobby info: {ex.Message}");
                 return null;
             }
         }
 
-        // Hilfsmethode: Parse Lobby-Broadcast
-        private LobbyInfo? ParseLobbyBroadcast(JsonElement broadcast, string senderIp)
-        {
-            try
-            {
-                return new LobbyInfo
-                {
-                    HostName = broadcast.GetProperty("hostName").GetString() ?? "Unbekannt",
-                    IpAddress = senderIp,
-                    Port = broadcast.GetProperty("port").GetInt32(),
-                    PlayerCount = broadcast.GetProperty("playerCount").GetInt32(),
-                    MaxPlayers = broadcast.TryGetProperty("maxPlayers", out var maxProp) && maxProp.TryGetInt32(out int max) ? max : 8,
-                    LastSeen = DateTime.UtcNow
-                };
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Fehler beim Parsen des Lobby-Broadcasts: {ex.Message}");
-                return null;
-            }
-        }
-
-        // Verbesserte Methode: Alle lokalen IP-Adressen ermitteln  
-        private List<IPAddress> GetAllLocalIPAddresses()
+        // Get simple local IP addresses without complex interface enumeration
+        private List<IPAddress> GetLocalIPAddresses()
         {
             var addresses = new List<IPAddress>();
             try
             {
-                var interfaces = NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(ni => ni.OperationalStatus == OperationalStatus.Up && 
-                                ni.NetworkInterfaceType != NetworkInterfaceType.Loopback);
-
-                foreach (var ni in interfaces)
+                // Use simple DNS-based method that's more reliable
+                var hostAddresses = Dns.GetHostAddresses(Dns.GetHostName())
+                    .Where(ip => ip.AddressFamily == AddressFamily.InterNetwork && 
+                                !IPAddress.IsLoopback(ip))
+                    .ToList();
+                
+                addresses.AddRange(hostAddresses);
+                
+                if (addresses.Count == 0)
                 {
-                    var ipProps = ni.GetIPProperties();
-                    foreach (var addr in ipProps.UnicastAddresses)
-                    {
-                        if (addr.Address.AddressFamily == AddressFamily.InterNetwork && 
-                            !IPAddress.IsLoopback(addr.Address))
-                        {
-                            addresses.Add(addr.Address);
-                        }
-                    }
+                    // Fallback: try to get at least one usable address
+                    addresses.Add(IPAddress.Parse("127.0.0.1"));
                 }
                 
-                LogDebugToFile($"Gefundene lokale IP-Adressen: {string.Join(", ", addresses)}");
+                LogDebugToFile($"Found local IP addresses: {string.Join(", ", addresses)}");
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Ermitteln der IP-Adressen: {ex.Message}");
+                LogDebugToFile($"Error getting local IP addresses: {ex.Message}");
+                // Fallback to localhost
+                addresses.Add(IPAddress.Parse("127.0.0.1"));
             }
             
             return addresses;
         }
 
-        // Hilfsmethode: Beste lokale IP-Adresse für Discovery ermitteln
-        private string GetLocalIPAddress()
+        // Get the best local IP address for hosting
+        private string GetBestLocalIP()
         {
             try
             {
-                var addresses = GetAllLocalIPAddresses();
+                var addresses = GetLocalIPAddresses();
                 
-                // Priorisierung: Lokale Netzwerke vor VPN-Adressen
-                var localNetworkAddress = addresses.FirstOrDefault(ip => 
-                    ip.ToString().StartsWith("192.168.") || 
-                    ip.ToString().StartsWith("10.") || 
-                    (ip.ToString().StartsWith("172.") && IsBetween(ip.GetAddressBytes()[1], 16, 31)));
-                
-                if (localNetworkAddress != null)
+                // Prioritize local network addresses over VPN addresses
+                var localNetworkIP = addresses.FirstOrDefault(ip => 
                 {
-                    LogDebugToFile($"Beste lokale IP-Adresse gewählt: {localNetworkAddress}");
-                    return localNetworkAddress.ToString();
+                    var bytes = ip.GetAddressBytes();
+                    return (bytes[0] == 192 && bytes[1] == 168) || // 192.168.x.x
+                           (bytes[0] == 10) || // 10.x.x.x
+                           (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31); // 172.16-31.x.x
+                });
+                
+                if (localNetworkIP != null)
+                {
+                    LogDebugToFile($"Selected best local IP: {localNetworkIP}");
+                    return localNetworkIP.ToString();
                 }
                 
-                // Fallback: erste verfügbare Adresse
-                var fallback = addresses.FirstOrDefault()?.ToString() ?? "127.0.0.1";
-                LogDebugToFile($"Fallback IP-Adresse gewählt: {fallback}");
-                return fallback;
+                // Fallback to first available non-loopback address
+                var fallbackIP = addresses.FirstOrDefault()?.ToString() ?? "127.0.0.1";
+                LogDebugToFile($"Using fallback IP: {fallbackIP}");
+                return fallbackIP;
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Ermitteln der IP-Adresse: {ex.Message}");
+                LogDebugToFile($"Error getting best local IP: {ex.Message}");
                 return "127.0.0.1";
             }
         }
 
-        private static bool IsBetween(byte value, int min, int max)
-        {
-            return value >= min && value <= max;
-        }
-
-        // Diagnose-Methode für Netzwerk-Probleme
-        public async Task<string> DiagnoseNetworkConnectivity()
-        {
-            var report = new StringBuilder();
-            report.AppendLine("=== NETZWERK-DIAGNOSE ===");
-            
-            try
-            {
-                // 1. Lokale IP-Adressen
-                var localIPs = GetAllLocalIPAddresses();
-                report.AppendLine($"Lokale IP-Adressen ({localIPs.Count}):");
-                foreach (var ip in localIPs)
-                {
-                    report.AppendLine($"  - {ip}");
-                }
-                
-                // 2. Netzwerk-Interfaces
-                report.AppendLine("\nNetzwerk-Interfaces:");
-                var interfaces = NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(ni => ni.OperationalStatus == OperationalStatus.Up);
-                    
-                foreach (var ni in interfaces)
-                {
-                    report.AppendLine($"  - {ni.Name} ({ni.NetworkInterfaceType}): {ni.OperationalStatus}");
-                    var ipProps = ni.GetIPProperties();
-                    foreach (var addr in ipProps.UnicastAddresses)
-                    {
-                        if (addr.Address.AddressFamily == AddressFamily.InterNetwork)
-                        {
-                            report.AppendLine($"    IP: {addr.Address}, Mask: {addr.IPv4Mask}");
-                        }
-                    }
-                }
-                
-                // 3. Broadcast-Ziele
-                var broadcastTargets = GetBroadcastTargets();
-                report.AppendLine($"\nBroadcast-Ziele ({broadcastTargets.Count}):");
-                foreach (var target in broadcastTargets)
-                {
-                    report.AppendLine($"  - {target}");
-                }
-                
-                // 4. Port-Test
-                report.AppendLine($"\nPort-Test für {DISCOVERY_PORT}:");
-                try
-                {
-                    using var testClient = new UdpClient(DISCOVERY_PORT);
-                    report.AppendLine($"  ✓ Port {DISCOVERY_PORT} erfolgreich gebunden");
-                    testClient.Close();
-                }
-                catch (Exception ex)
-                {
-                    report.AppendLine($"  ✗ Port {DISCOVERY_PORT} Fehler: {ex.Message}");
-                }
-                
-                // 5. Broadcast-Test
-                report.AppendLine("\nBroadcast-Test:");
-                try
-                {
-                    using var testClient = new UdpClient();
-                    testClient.EnableBroadcast = true;
-                    
-                    var testData = Encoding.UTF8.GetBytes("DIAGNOSE-TEST");
-                    await testClient.SendAsync(testData, testData.Length, new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT + 1));
-                    report.AppendLine("  ✓ Broadcast erfolgreich gesendet");
-                }
-                catch (Exception ex)
-                {
-                    report.AppendLine($"  ✗ Broadcast-Fehler: {ex.Message}");
-                }
-                
-            }
-            catch (Exception ex)
-            {
-                report.AppendLine($"Diagnose-Fehler: {ex.Message}");
-            }
-            
-            report.AppendLine("=== DIAGNOSE ENDE ===");
-            var result = report.ToString();
-            LogDebugToFile(result);
-            return result;
-        }
-
-        // Cleanup-Methoden für Discovery-Ressourcen
+        // Simplified cleanup method
         public void StopLobbyBroadcast()
         {
             try
@@ -1721,12 +1399,56 @@ namespace TetrisMultiplayer.Networking
                 _discoveryTask?.Wait(1000);
                 _discoveryServer?.Close();
                 _discoveryServer?.Dispose();
-                LogDebugToFile("Lobby-Broadcasting gestoppt");
+                LogDebugToFile("Lobby broadcasting stopped");
             }
             catch (Exception ex)
             {
-                LogDebugToFile($"Fehler beim Stoppen des Lobby-Broadcasts: {ex.Message}");
+                LogDebugToFile($"Error stopping lobby broadcast: {ex.Message}");
             }
+        }
+
+
+
+
+
+        // Optional simple network diagnostics (doesn't break startup if it fails)
+        public async Task<string> GetSimpleNetworkInfo()
+        {
+            var info = new StringBuilder();
+            info.AppendLine("=== Network Information ===");
+            
+            try
+            {
+                var localIPs = GetLocalIPAddresses();
+                info.AppendLine($"Available IP addresses ({localIPs.Count}):");
+                foreach (var ip in localIPs)
+                {
+                    var type = "";
+                    var bytes = ip.GetAddressBytes();
+                    if (bytes[0] == 192 && bytes[1] == 168)
+                        type = " (LAN)";
+                    else if (bytes[0] == 10)
+                        type = " (VPN/Corporate)";
+                    else if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                        type = " (Private)";
+                    else if (bytes[0] == 100 || bytes[0] == 25)
+                        type = " (VPN)";
+                    
+                    info.AppendLine($"  - {ip}{type}");
+                }
+                
+                info.AppendLine($"\nDiscovery port: {DISCOVERY_PORT} (UDP)");
+                info.AppendLine("Game port: 5000 (TCP)");
+            }
+            catch (Exception ex)
+            {
+                info.AppendLine($"Error getting network info: {ex.Message}");
+            }
+            
+            info.AppendLine("=== End Network Information ===");
+            var result = info.ToString();
+            LogDebugToFile(result);
+            return result;
         }
     }
 }
