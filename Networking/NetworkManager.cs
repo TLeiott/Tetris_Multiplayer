@@ -1116,22 +1116,26 @@ namespace TetrisMultiplayer.Networking
             UdpClient? client = null;
             try
             {
-                // Use pure listener approach - no sending, no conflicts
-                client = new UdpClient();
-                client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                
-                // Try binding to discovery port
+                // Use proper UdpClient constructor that binds to the port automatically
                 try
                 {
-                    client.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
+                    client = new UdpClient(DISCOVERY_PORT);
+                    client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                     Console.WriteLine($"Listening on UDP port {DISCOVERY_PORT} for lobby broadcasts...");
                     LogDebugToFile($"Successfully bound to discovery port {DISCOVERY_PORT}");
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+                {
+                    LogDebugToFile($"Port {DISCOVERY_PORT} is already in use: {ex.Message}");
+                    Console.WriteLine($"Discovery error: Port {DISCOVERY_PORT} is already in use. Another client may be running.");
+                    Console.WriteLine("Try closing other instances or wait a moment before retrying.");
+                    return lobbies; // Return empty list instead of crashing
                 }
                 catch (SocketException ex)
                 {
                     LogDebugToFile($"Failed to bind to port {DISCOVERY_PORT}: {ex.Message}");
-                    Console.WriteLine($"Warning: Could not bind to discovery port {DISCOVERY_PORT}. Discovery may not work properly.");
-                    // Try to continue anyway
+                    Console.WriteLine($"Discovery error: Could not bind to discovery port {DISCOVERY_PORT}. {ex.Message}");
+                    return lobbies; // Return empty list instead of crashing
                 }
                 
                 // Set reasonable timeout for individual receive operations
@@ -1142,16 +1146,19 @@ namespace TetrisMultiplayer.Networking
                 // Listen for broadcasts from hosts
                 var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
                 int receivedCount = 0;
+                var lastProgressTime = DateTime.UtcNow;
                 
                 while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
                 {
                     try
                     {
                         // Show progress every 2 seconds
-                        var remainingTime = endTime - DateTime.UtcNow;
-                        if (remainingTime.TotalSeconds > 0 && (int)remainingTime.TotalSeconds % 2 == 0)
+                        var now = DateTime.UtcNow;
+                        var remainingTime = endTime - now;
+                        if ((now - lastProgressTime).TotalSeconds >= 2)
                         {
                             Console.WriteLine($"Searching... ({(int)remainingTime.TotalSeconds}s remaining)");
+                            lastProgressTime = now;
                         }
                         
                         var result = await client.ReceiveAsync();
