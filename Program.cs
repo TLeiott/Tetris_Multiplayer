@@ -349,12 +349,8 @@ namespace TetrisMultiplayer
             DateTime lastGravity = DateTime.Now;
             const int gravityDelayMs = 1000; // Piece falls every second
             
-            // Starte Task für Spectator-Snapshots UND Real-time leaderboard updates
-            var snapshotCts = new CancellationTokenSource();
             // Track which players have placed in the current round (host + clients)
             var playersWhoPlaced = new HashSet<string>();
-            var snapshotTask = Task.Run(() => BroadcastSpectatorSnapshots(network, fields, scores, hps, spectators, snapshotCts.Token));
-            var leaderboardTask = Task.Run(() => BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, snapshotCts.Token));
             
             try
             {
@@ -510,6 +506,10 @@ namespace TetrisMultiplayer
                         // Mark host as having placed
                         playersWhoPlaced.Add(hostId);
                         
+                        // Broadcast updated leaderboard data after host placement
+                        await BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, cancellationToken);
+                        await BroadcastSpectatorSnapshots(network, fields, scores, hps, spectators, cancellationToken);
+                        
                         // Update UI after placement
                         var localLeaderboard2 = playerIds.Select(pid => (pid, scores[pid], hps[pid], spectators.Contains(pid))).ToList();
                         TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard2, hostId, "HOST PIECE PLACED - WAITING FOR CLIENTS...", playerNames, playersWhoPlaced);
@@ -559,6 +559,10 @@ namespace TetrisMultiplayer
                         }
                     }
                     
+                    // Broadcast updated leaderboard data after processing all client pieces and HP changes
+                    await BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, cancellationToken);
+                    await BroadcastSpectatorSnapshots(network, fields, scores, hps, spectators, cancellationToken);
+                    
                     // Final leaderboard update showing all who completed
                     var finalLeaderboard = playerIds.Select(pid => (pid, scores[pid], hps[pid], spectators.Contains(pid))).ToList();
                     TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, finalLeaderboard, hostId, "ROUND COMPLETE", playerNames, playersWhoPlaced);
@@ -573,6 +577,10 @@ namespace TetrisMultiplayer
                         deletedRowsPerPlayer = deletedRowsPerPlayer 
                     };
                     await network.BroadcastAsync(roundResults);
+                    
+                    // Broadcast final leaderboard state after round completion
+                    await BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, cancellationToken);
+                    await BroadcastSpectatorSnapshots(network, fields, scores, hps, spectators, cancellationToken);
                     
                     // SYNCHRONIZATION FIX: Ensure ALL players wait before next round starts
                     logger.LogInformation($"[Host] Round {round} complete. Implementing round synchronization...");
@@ -666,25 +674,7 @@ namespace TetrisMultiplayer
                 // Mark game as no longer active
                 GameLogger.SetGameActive(false);
                 
-                logger.LogInformation("Cleaning up host game loop tasks...");
-                
-                // Cancel the background tasks gracefully
-                snapshotCts.Cancel();
-                
-                // Wait for tasks to complete with timeout to prevent hanging
-                try
-                {
-                    await Task.WhenAll(
-                        WaitForTaskWithTimeout(snapshotTask, 2000, "SpectatorSnapshot"),
-                        WaitForTaskWithTimeout(leaderboardTask, 2000, "Leaderboard")
-                    );
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning($"Error during task cleanup: {ex.Message}");
-                }
-                
-                logger.LogInformation("Host game loop cleanup completed");
+                logger.LogInformation("Host game loop completed");
             }
         }
 
@@ -964,7 +954,7 @@ namespace TetrisMultiplayer
                                         var score = realtimeScores.GetValueOrDefault(id, 0);
                                         if (id == playerId)
                                             score = Math.Max(score, engine.Score);
-                                        return (id, score, realtimeHp.GetValueOrDefault(id, 20), realtimeSpectators.Contains(id));
+                                        return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                     }).ToList()
                                     : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
                                 
