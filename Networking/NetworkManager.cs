@@ -962,19 +962,19 @@ namespace TetrisMultiplayer.Networking
             public DateTime LastSeen { get; set; }
         }
 
-        // Host: Simplified and robust lobby broadcasting
+        // Host: Truly simplified and robust lobby broadcasting - pure broadcast only
         public async Task StartLobbyBroadcast(string hostName, int gamePort, CancellationToken cancellationToken = default)
         {
             _hostName = hostName;
             try
             {
-                // Simple and reliable UDP setup for broadcasting
+                // Simple UDP broadcaster - no listening, no port binding conflicts
                 _discoveryServer = new UdpClient();
                 _discoveryServer.EnableBroadcast = true;
-                // Don't bind to a specific port - let the system choose to avoid conflicts
+                // Let system choose port to avoid conflicts
                 
-                _discoveryTask = Task.Run(() => SimplifiedBroadcastLoop(gamePort, cancellationToken), cancellationToken);
-                LogDebugToFile($"Simplified lobby broadcasting started for host '{hostName}'");
+                _discoveryTask = Task.Run(() => PureBroadcastLoop(gamePort, cancellationToken), cancellationToken);
+                LogDebugToFile($"Pure broadcast lobby discovery started for host '{hostName}'");
                 
                 // Show available IPs for user reference (but don't fail if this fails)
                 try
@@ -995,16 +995,16 @@ namespace TetrisMultiplayer.Networking
             }
         }
 
-        // Simplified broadcast loop that's more reliable
-        private async Task SimplifiedBroadcastLoop(int gamePort, CancellationToken cancellationToken)
+        // Pure broadcast loop - no request handling to avoid port conflicts
+        private async Task PureBroadcastLoop(int gamePort, CancellationToken cancellationToken)
         {
-            var broadcastEndpoints = GetSimplifiedBroadcastTargets();
+            var broadcastEndpoints = GetComprehensiveBroadcastTargets();
             
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    // Create lobby info
+                    // Create lobby info - includes all necessary data for clients
                     var lobbyInfo = new
                     {
                         type = "LobbyBroadcast",
@@ -1019,7 +1019,7 @@ namespace TetrisMultiplayer.Networking
                     var json = JsonSerializer.Serialize(lobbyInfo);
                     var data = Encoding.UTF8.GetBytes(json);
                     
-                    // Broadcast to simplified target list
+                    // Broadcast to all targets including VPN networks
                     foreach (var endpoint in broadcastEndpoints)
                     {
                         try
@@ -1033,89 +1033,18 @@ namespace TetrisMultiplayer.Networking
                             // Continue to other endpoints
                         }
                     }
-                    
-                    // Simple request handling - check for incoming discovery requests
-                    await HandleIncomingRequests(gamePort);
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     LogDebugToFile($"Error in broadcast loop: {ex.Message}");
                 }
                 
-                await Task.Delay(3000, cancellationToken); // Broadcast every 3 seconds
+                await Task.Delay(2000, cancellationToken); // Broadcast every 2 seconds for responsiveness
             }
         }
 
-        // Simplified request handling that doesn't conflict with client discovery
-        private async Task HandleIncomingRequests(int gamePort)
-        {
-            try
-            {
-                // Use a separate UDP client for listening to avoid port conflicts
-                using var listener = new UdpClient();
-                listener.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                listener.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
-                listener.Client.ReceiveTimeout = 500; // Short timeout to not block broadcasts
-                
-                // Check for incoming requests quickly and respond
-                if (listener.Available > 0)
-                {
-                    var result = await listener.ReceiveAsync();
-                    await ProcessDiscoveryRequest(result, gamePort);
-                }
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
-            {
-                // Timeout is expected and normal
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Error handling discovery requests: {ex.Message}");
-            }
-        }
-
-        // Simplified discovery request processing
-        private async Task ProcessDiscoveryRequest(UdpReceiveResult result, int gamePort)
-        {
-            try
-            {
-                var json = Encoding.UTF8.GetString(result.Buffer);
-                var request = JsonSerializer.Deserialize<JsonElement>(json);
-                
-                if (request.TryGetProperty("type", out var typeProp) && 
-                    typeProp.GetString() == "DiscoveryRequest")
-                {
-                    // Simple response with host information
-                    var bestIP = GetBestLocalIP();
-                    
-                    var response = new
-                    {
-                        type = "DiscoveryResponse",
-                        hostName = _hostName ?? "Unknown Host",
-                        ipAddress = bestIP,
-                        port = gamePort,
-                        playerCount = ConnectedPlayerIds.Count + 1,
-                        maxPlayers = 8,
-                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                    };
-
-                    var responseJson = JsonSerializer.Serialize(response);
-                    var responseData = Encoding.UTF8.GetBytes(responseJson);
-                    
-                    // Send response back to requester
-                    using var responder = new UdpClient();
-                    await responder.SendAsync(responseData, responseData.Length, result.RemoteEndPoint);
-                    LogDebugToFile($"Discovery response sent to {result.RemoteEndPoint}");
-                }
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Error processing discovery request: {ex.Message}");
-            }
-        }
-
-        // Get simplified broadcast targets - prioritize reliability over completeness
-        private List<IPEndPoint> GetSimplifiedBroadcastTargets()
+        // Get comprehensive broadcast targets including VPN networks
+        private List<IPEndPoint> GetComprehensiveBroadcastTargets()
         {
             var targets = new List<IPEndPoint>();
             
@@ -1124,7 +1053,7 @@ namespace TetrisMultiplayer.Networking
                 // Standard broadcast - works in most simple network setups
                 targets.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
                 
-                // Get local network broadcast addresses without complex calculation
+                // Get local network broadcast addresses including VPN support
                 var localIPs = GetLocalIPAddresses();
                 foreach (var ip in localIPs)
                 {
@@ -1157,6 +1086,22 @@ namespace TetrisMultiplayer.Networking
                             if (!targets.Any(t => t.Address.Equals(broadcast)))
                                 targets.Add(target);
                         }
+                        else if (bytes[0] == 100)
+                        {
+                            // 100.x.x.255 - Tailscale and similar VPN networks
+                            var broadcast = new IPAddress(new byte[] { 100, bytes[1], bytes[2], 255 });
+                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
+                            if (!targets.Any(t => t.Address.Equals(broadcast)))
+                                targets.Add(target);
+                        }
+                        else if (bytes[0] == 25)
+                        {
+                            // 25.x.x.255 - Hamachi and similar VPN networks
+                            var broadcast = new IPAddress(new byte[] { 25, bytes[1], bytes[2], 255 });
+                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
+                            if (!targets.Any(t => t.Address.Equals(broadcast)))
+                                targets.Add(target);
+                        }
                     }
                     catch
                     {
@@ -1165,7 +1110,7 @@ namespace TetrisMultiplayer.Networking
                     }
                 }
                 
-                LogDebugToFile($"Simplified broadcast targets: {string.Join(", ", targets)}");
+                LogDebugToFile($"Comprehensive broadcast targets: {string.Join(", ", targets)}");
             }
             catch (Exception ex)
             {
@@ -1180,49 +1125,26 @@ namespace TetrisMultiplayer.Networking
 
 
 
-        // Simplified discovery that avoids port conflicts
-        public async Task<List<LobbyInfo>> DiscoverLobbies(int timeoutMs = 5000, CancellationToken cancellationToken = default)
+        // Pure listening-based discovery - no conflicts, truly plug-and-play
+        public async Task<List<LobbyInfo>> DiscoverLobbies(int timeoutMs = 8000, CancellationToken cancellationToken = default)
         {
             var lobbies = new List<LobbyInfo>();
             var seenHosts = new HashSet<string>();
             
-            LogDebugToFile("Starting simplified lobby discovery");
+            LogDebugToFile("Starting pure listening lobby discovery");
             
             try
             {
-                // Use a single, reliable discovery method
+                // Use pure listener approach - no sending, no conflicts
                 using var client = new UdpClient();
-                client.EnableBroadcast = true;
+                client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                client.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
+                client.Client.ReceiveTimeout = Math.Min(timeoutMs, 10000);
                 
-                // Create discovery request
-                var request = new
-                {
-                    type = "DiscoveryRequest",
-                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-                };
+                LogDebugToFile("Listening for lobby broadcasts...");
                 
-                var requestJson = JsonSerializer.Serialize(request);
-                var requestData = Encoding.UTF8.GetBytes(requestJson);
-                
-                // Send requests to broadcast targets
-                var targets = GetSimplifiedBroadcastTargets();
-                
-                foreach (var target in targets)
-                {
-                    try
-                    {
-                        await client.SendAsync(requestData, requestData.Length, target);
-                        LogDebugToFile($"Discovery request sent to {target}");
-                    }
-                    catch (Exception ex)
-                    {
-                        LogDebugToFile($"Failed to send to {target}: {ex.Message}");
-                    }
-                }
-                
-                // Listen for responses
+                // Listen for broadcasts from hosts
                 var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                client.Client.ReceiveTimeout = Math.Min(timeoutMs, 5000);
                 
                 while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
                 {
@@ -1230,12 +1152,14 @@ namespace TetrisMultiplayer.Networking
                     {
                         var result = await client.ReceiveAsync();
                         var json = Encoding.UTF8.GetString(result.Buffer);
+                        LogDebugToFile($"Received broadcast from {result.RemoteEndPoint}: {json}");
+                        
                         var response = JsonSerializer.Deserialize<JsonElement>(json);
                         
                         if (response.TryGetProperty("type", out var typeProp))
                         {
                             var msgType = typeProp.GetString();
-                            if (msgType == "DiscoveryResponse" || msgType == "LobbyBroadcast")
+                            if (msgType == "LobbyBroadcast")
                             {
                                 var lobby = ParseLobbyInfo(response, result.RemoteEndPoint.Address.ToString());
                                 if (lobby != null)
@@ -1253,12 +1177,13 @@ namespace TetrisMultiplayer.Networking
                     }
                     catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                     {
-                        // Timeout is expected
+                        // Timeout is expected - continue listening
+                        LogDebugToFile("Listening timeout - continuing...");
                         break;
                     }
                     catch (Exception ex)
                     {
-                        LogDebugToFile($"Error receiving discovery response: {ex.Message}");
+                        LogDebugToFile($"Error receiving discovery broadcast: {ex.Message}");
                     }
                 }
                 
@@ -1357,15 +1282,15 @@ namespace TetrisMultiplayer.Networking
             return addresses;
         }
 
-        // Get the best local IP address for hosting
+        // Get the best local IP address for hosting with VPN support
         private string GetBestLocalIP()
         {
             try
             {
                 var addresses = GetLocalIPAddresses();
                 
-                // Prioritize local network addresses over VPN addresses
-                var localNetworkIP = addresses.FirstOrDefault(ip => 
+                // First priority: LAN addresses (most reliable for local network)
+                var lanIP = addresses.FirstOrDefault(ip => 
                 {
                     var bytes = ip.GetAddressBytes();
                     return (bytes[0] == 192 && bytes[1] == 168) || // 192.168.x.x
@@ -1373,10 +1298,24 @@ namespace TetrisMultiplayer.Networking
                            (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31); // 172.16-31.x.x
                 });
                 
-                if (localNetworkIP != null)
+                if (lanIP != null)
                 {
-                    LogDebugToFile($"Selected best local IP: {localNetworkIP}");
-                    return localNetworkIP.ToString();
+                    LogDebugToFile($"Selected LAN IP: {lanIP}");
+                    return lanIP.ToString();
+                }
+                
+                // Second priority: VPN addresses if no LAN found
+                var vpnIP = addresses.FirstOrDefault(ip => 
+                {
+                    var bytes = ip.GetAddressBytes();
+                    return bytes[0] == 100 || // Tailscale/Zerotier
+                           bytes[0] == 25;    // Hamachi
+                });
+                
+                if (vpnIP != null)
+                {
+                    LogDebugToFile($"Selected VPN IP: {vpnIP}");
+                    return vpnIP.ToString();
                 }
                 
                 // Fallback to first available non-loopback address
