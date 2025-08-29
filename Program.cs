@@ -774,7 +774,7 @@ namespace TetrisMultiplayer
             
             try
             {
-                var lobbies = await network.DiscoverLobbies(6000, cts.Token); // Reasonable timeout
+                var lobbies = await network.DiscoverLobbies(10000, cts.Token); // Increased timeout for better discovery
                 
                 if (lobbies.Count > 0)
                 {

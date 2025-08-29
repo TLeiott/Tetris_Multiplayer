@@ -994,6 +994,7 @@ namespace TetrisMultiplayer.Networking
                 
                 _discoveryTask = Task.Run(() => PureBroadcastLoop(gamePort, cancellationToken), cancellationToken);
                 LogDebugToFile($"Pure broadcast lobby discovery started for host '{hostName}'");
+                Console.WriteLine("Lobby discovery active - clients can find this host automatically.");
                 
                 // Show available IPs for user reference (but don't fail if this fails)
                 try
@@ -1009,6 +1010,7 @@ namespace TetrisMultiplayer.Networking
             catch (Exception ex)
             {
                 LogDebugToFile($"Error starting lobby broadcast: {ex.Message}");
+                Console.WriteLine("Warning: Auto-discovery may not work, but manual IP entry is still available.");
                 // Don't throw - let the host start anyway for better plug-and-play experience
                 LogDebugToFile("Host will continue without auto-discovery (manual IP entry still works)");
             }
@@ -1017,7 +1019,7 @@ namespace TetrisMultiplayer.Networking
         // Pure broadcast loop - no request handling to avoid port conflicts
         private async Task PureBroadcastLoop(int gamePort, CancellationToken cancellationToken)
         {
-            var broadcastEndpoints = GetComprehensiveBroadcastTargets();
+            Console.WriteLine("Starting lobby broadcasts...");
             
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -1038,19 +1040,57 @@ namespace TetrisMultiplayer.Networking
                     var json = JsonSerializer.Serialize(lobbyInfo);
                     var data = Encoding.UTF8.GetBytes(json);
                     
-                    // Broadcast to all targets including VPN networks
-                    foreach (var endpoint in broadcastEndpoints)
+                    // Send to multiple broadcast addresses for maximum compatibility
+                    var broadcastTargets = new List<IPEndPoint>
+                    {
+                        new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT), // Standard broadcast
+                    };
+                    
+                    // Add LAN-specific broadcasts
+                    try
+                    {
+                        var localIPs = GetLocalIPAddresses();
+                        foreach (var ip in localIPs)
+                        {
+                            var bytes = ip.GetAddressBytes();
+                            if (bytes[0] == 192 && bytes[1] == 168)
+                            {
+                                // 192.168.x.255 broadcast
+                                var broadcast = new IPAddress(new byte[] { 192, 168, bytes[2], 255 });
+                                broadcastTargets.Add(new IPEndPoint(broadcast, DISCOVERY_PORT));
+                            }
+                            else if (bytes[0] == 10)
+                            {
+                                // 10.x.x.255 broadcast
+                                var broadcast = new IPAddress(new byte[] { 10, bytes[1], bytes[2], 255 });
+                                broadcastTargets.Add(new IPEndPoint(broadcast, DISCOVERY_PORT));
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogDebugToFile($"Error getting specific broadcast addresses: {ex.Message}");
+                    }
+                    
+                    // Broadcast to all targets
+                    int successCount = 0;
+                    foreach (var endpoint in broadcastTargets)
                     {
                         try
                         {
                             await _discoveryServer!.SendAsync(data, data.Length, endpoint);
+                            successCount++;
                             LogDebugToFile($"Broadcast sent to {endpoint}");
                         }
                         catch (Exception ex)
                         {
                             LogDebugToFile($"Broadcast to {endpoint} failed: {ex.Message}");
-                            // Continue to other endpoints
                         }
+                    }
+                    
+                    if (successCount == 0)
+                    {
+                        LogDebugToFile("Warning: No broadcasts succeeded");
                     }
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -1058,91 +1098,11 @@ namespace TetrisMultiplayer.Networking
                     LogDebugToFile($"Error in broadcast loop: {ex.Message}");
                 }
                 
-                await Task.Delay(2000, cancellationToken); // Broadcast every 2 seconds for responsiveness
-            }
-        }
-
-        // Get comprehensive broadcast targets including VPN networks
-        private List<IPEndPoint> GetComprehensiveBroadcastTargets()
-        {
-            var targets = new List<IPEndPoint>();
-            
-            try
-            {
-                // Standard broadcast - works in most simple network setups
-                targets.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
-                
-                // Get local network broadcast addresses including VPN support
-                var localIPs = GetLocalIPAddresses();
-                foreach (var ip in localIPs)
-                {
-                    try
-                    {
-                        var bytes = ip.GetAddressBytes();
-                        
-                        // Handle common network patterns
-                        if (bytes[0] == 192 && bytes[1] == 168)
-                        {
-                            // 192.168.x.255 - most home networks
-                            var broadcast = new IPAddress(new byte[] { 192, 168, bytes[2], 255 });
-                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
-                            if (!targets.Any(t => t.Address.Equals(broadcast)))
-                                targets.Add(target);
-                        }
-                        else if (bytes[0] == 10)
-                        {
-                            // 10.x.x.255 - corporate/VPN networks
-                            var broadcast = new IPAddress(new byte[] { 10, bytes[1], bytes[2], 255 });
-                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
-                            if (!targets.Any(t => t.Address.Equals(broadcast)))
-                                targets.Add(target);
-                        }
-                        else if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
-                        {
-                            // 172.16-31.x.255 - private networks
-                            var broadcast = new IPAddress(new byte[] { 172, bytes[1], bytes[2], 255 });
-                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
-                            if (!targets.Any(t => t.Address.Equals(broadcast)))
-                                targets.Add(target);
-                        }
-                        else if (bytes[0] == 100)
-                        {
-                            // 100.x.x.255 - Tailscale and similar VPN networks
-                            var broadcast = new IPAddress(new byte[] { 100, bytes[1], bytes[2], 255 });
-                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
-                            if (!targets.Any(t => t.Address.Equals(broadcast)))
-                                targets.Add(target);
-                        }
-                        else if (bytes[0] == 25)
-                        {
-                            // 25.x.x.255 - Hamachi and similar VPN networks
-                            var broadcast = new IPAddress(new byte[] { 25, bytes[1], bytes[2], 255 });
-                            var target = new IPEndPoint(broadcast, DISCOVERY_PORT);
-                            if (!targets.Any(t => t.Address.Equals(broadcast)))
-                                targets.Add(target);
-                        }
-                    }
-                    catch
-                    {
-                        // Skip this IP if we can't process it
-                        continue;
-                    }
-                }
-                
-                LogDebugToFile($"Comprehensive broadcast targets: {string.Join(", ", targets)}");
-            }
-            catch (Exception ex)
-            {
-                LogDebugToFile($"Error getting broadcast targets: {ex.Message}");
-                // Fallback to basic broadcast only
-                targets.Clear();
-                targets.Add(new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT));
+                await Task.Delay(1500, cancellationToken); // Broadcast every 1.5 seconds for better responsiveness
             }
             
-            return targets;
+            Console.WriteLine("Lobby broadcasts stopped.");
         }
-
-
 
         // Pure listening-based discovery - no conflicts, truly plug-and-play
         public async Task<List<LobbyInfo>> DiscoverLobbies(int timeoutMs = 8000, CancellationToken cancellationToken = default)
@@ -1151,27 +1111,55 @@ namespace TetrisMultiplayer.Networking
             var seenHosts = new HashSet<string>();
             
             LogDebugToFile("Starting pure listening lobby discovery");
+            Console.WriteLine("Listening for host broadcasts...");
             
+            UdpClient? client = null;
             try
             {
                 // Use pure listener approach - no sending, no conflicts
-                using var client = new UdpClient();
+                client = new UdpClient();
                 client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                client.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
-                client.Client.ReceiveTimeout = Math.Min(timeoutMs, 10000);
+                
+                // Try binding to discovery port
+                try
+                {
+                    client.Client.Bind(new IPEndPoint(IPAddress.Any, DISCOVERY_PORT));
+                    Console.WriteLine($"Listening on UDP port {DISCOVERY_PORT} for lobby broadcasts...");
+                    LogDebugToFile($"Successfully bound to discovery port {DISCOVERY_PORT}");
+                }
+                catch (SocketException ex)
+                {
+                    LogDebugToFile($"Failed to bind to port {DISCOVERY_PORT}: {ex.Message}");
+                    Console.WriteLine($"Warning: Could not bind to discovery port {DISCOVERY_PORT}. Discovery may not work properly.");
+                    // Try to continue anyway
+                }
+                
+                // Set reasonable timeout for individual receive operations
+                client.Client.ReceiveTimeout = 1000; // 1 second timeout per receive
                 
                 LogDebugToFile("Listening for lobby broadcasts...");
                 
                 // Listen for broadcasts from hosts
                 var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                int receivedCount = 0;
                 
                 while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
                 {
                     try
                     {
+                        // Show progress every 2 seconds
+                        var remainingTime = endTime - DateTime.UtcNow;
+                        if (remainingTime.TotalSeconds > 0 && (int)remainingTime.TotalSeconds % 2 == 0)
+                        {
+                            Console.WriteLine($"Searching... ({(int)remainingTime.TotalSeconds}s remaining)");
+                        }
+                        
                         var result = await client.ReceiveAsync();
+                        receivedCount++;
+                        
                         var json = Encoding.UTF8.GetString(result.Buffer);
                         LogDebugToFile($"Received broadcast from {result.RemoteEndPoint}: {json}");
+                        Console.WriteLine($"Received broadcast from {result.RemoteEndPoint.Address}");
                         
                         var response = JsonSerializer.Deserialize<JsonElement>(json);
                         
@@ -1188,6 +1176,7 @@ namespace TetrisMultiplayer.Networking
                                     {
                                         lobbies.Add(lobby);
                                         seenHosts.Add(hostKey);
+                                        Console.WriteLine($"Found lobby: {lobby.HostName} at {lobby.IpAddress}:{lobby.Port}");
                                         LogDebugToFile($"Found lobby: {lobby.HostName} at {lobby.IpAddress}:{lobby.Port}");
                                     }
                                 }
@@ -1198,19 +1187,36 @@ namespace TetrisMultiplayer.Networking
                     {
                         // Timeout is expected - continue listening
                         LogDebugToFile("Listening timeout - continuing...");
+                        continue;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Expected when cancelling
                         break;
                     }
                     catch (Exception ex)
                     {
                         LogDebugToFile($"Error receiving discovery broadcast: {ex.Message}");
+                        Console.WriteLine($"Discovery error: {ex.Message}");
                     }
                 }
                 
-                LogDebugToFile($"Discovery completed. Found {lobbies.Count} lobbies");
+                Console.WriteLine($"Discovery completed. Received {receivedCount} broadcasts, found {lobbies.Count} unique lobbies");
+                LogDebugToFile($"Discovery completed. Received {receivedCount} broadcasts, found {lobbies.Count} unique lobbies");
             }
             catch (Exception ex)
             {
                 LogDebugToFile($"Error in lobby discovery: {ex.Message}");
+                Console.WriteLine($"Discovery failed: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    client?.Close();
+                    client?.Dispose();
+                }
+                catch { }
             }
             
             return lobbies;
