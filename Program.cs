@@ -188,12 +188,17 @@ namespace TetrisMultiplayer
             {
                 logger.LogInformation("Starte Test-Modus...");
                 TetrisMultiplayer.Tests.PreviewOptimizationTest.RunManualTest();
+                Console.WriteLine();
+                TetrisMultiplayer.Tests.ColorUIVisualizationTest.RunColorTest();
             }
             else if (mode == "validate" || mode == "v")
             {
                 logger.LogInformation("Starte Validierungs-Modus...");
                 TetrisMultiplayer.Tests.PreviewValidationTest.ValidateOptimizations();
                 TetrisMultiplayer.Tests.ManualPreviewSyncTest.TestPreviewSynchronization();
+                Console.WriteLine();
+                // Zusätzlich: Color UI Demo
+                TetrisMultiplayer.Tests.SimpleColorDemo.RunDemo();
             }
             else if (mode == "single" || mode == "s")
             {

@@ -6,6 +6,24 @@ namespace TetrisMultiplayer.UI
 {
     public class ConsoleUI
     {
+        // Farbschema für verschiedene Tetromino-Typen
+        private static readonly Dictionary<TetrominoType, ConsoleColor> TetrominoColors = new()
+        {
+            { TetrominoType.I, ConsoleColor.Cyan },     // I-Piece: Cyan
+            { TetrominoType.O, ConsoleColor.Yellow },   // O-Piece: Gelb
+            { TetrominoType.T, ConsoleColor.Magenta },  // T-Piece: Magenta
+            { TetrominoType.S, ConsoleColor.Green },    // S-Piece: Grün
+            { TetrominoType.Z, ConsoleColor.Red },      // Z-Piece: Rot
+            { TetrominoType.J, ConsoleColor.Blue },     // J-Piece: Blau
+            { TetrominoType.L, ConsoleColor.DarkYellow } // L-Piece: Orange (DarkYellow)
+        };
+
+        // Standard-Farben für UI-Elemente
+        private static readonly ConsoleColor BorderColor = ConsoleColor.White;
+        private static readonly ConsoleColor ScoreColor = ConsoleColor.Green;
+        private static readonly ConsoleColor StatusColor = ConsoleColor.Yellow;
+        private static readonly ConsoleColor LeaderboardHeaderColor = ConsoleColor.Cyan;
+        private static readonly ConsoleColor GameTitleColor = ConsoleColor.Magenta;
         private static int[,]? _lastRenderedGrid;
         private static int _lastScore = -1;
         private static string _lastStatusMsg = "";
@@ -15,6 +33,65 @@ namespace TetrisMultiplayer.UI
         // Preview optimization caches
         private static TetrominoType? _lastPreviewType = null;
         private static int[,]? _lastPreviewGrid = null;
+
+        /// <summary>
+        /// Sichere Farbausgabe mit Ausnahmebehandlung - Utility-Methode für farbigen Text
+        /// </summary>
+        private static void WriteColored(string text, ConsoleColor? foreground = null, ConsoleColor? background = null)
+        {
+            try
+            {
+                var originalFg = Console.ForegroundColor;
+                var originalBg = Console.BackgroundColor;
+                
+                if (foreground.HasValue) Console.ForegroundColor = foreground.Value;
+                if (background.HasValue) Console.BackgroundColor = background.Value;
+                
+                Console.Write(text);
+                
+                // Farben zurücksetzen
+                Console.ForegroundColor = originalFg;
+                Console.BackgroundColor = originalBg;
+            }
+            catch (Exception)
+            {
+                // Bei Farbfehlern einfach ohne Farbe ausgeben
+                Console.Write(text);
+            }
+        }
+
+        /// <summary>
+        /// Zeichnet einen farbigen Block basierend auf Tetromino-Typ
+        /// </summary>
+        private static void WriteColoredBlock(int blockValue)
+        {
+            try
+            {
+                if (blockValue == 0)
+                {
+                    Console.Write(" .");
+                }
+                else
+                {
+                    // Blockwert zu Tetromino-Typ konvertieren (blockValue = Type + 1)
+                    var type = (TetrominoType)(blockValue - 1);
+                    if (TetrominoColors.TryGetValue(type, out ConsoleColor color))
+                    {
+                        WriteColored("[]", color);
+                    }
+                    else
+                    {
+                        // Fallback ohne Farbe
+                        Console.Write("[]");
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Bei Fehlern Fallback ohne Farbe
+                Console.Write(blockValue == 0 ? " ." : "[]");
+            }
+        }
 
         public static void RunSinglePlayer()
         {
@@ -39,15 +116,18 @@ namespace TetrisMultiplayer.UI
                 }
 
                 DrawField(engine);
-                // Draw next piece preview (4x4 grid) - optimized
+                // Draw next piece preview (4x4 grid) - optimized with colors
                 int previewLeft = TetrisEngine.Width * 2 + 6;
                 int previewTop = 3; // Start after "Next:" label
                 Console.SetCursorPosition(previewLeft, 2);
-                Console.Write("Next:");
+                WriteColored("Next:", StatusColor);
                 DrawOptimizedPreview(engine.Next, previewLeft, previewTop);
+                
                 Console.SetCursorPosition(0, TetrisEngine.Height + 2);
-                Console.WriteLine($"Score: {engine.Score}");
-                Console.WriteLine($"Next: {engine.Next.Type}");
+                WriteColored($"Score: {engine.Score}", ScoreColor);
+                Console.WriteLine();
+                WriteColored($"Next: {engine.Next.Type}", StatusColor);
+                Console.WriteLine();
                 Console.WriteLine("Steuerung: Links/Rechts/Unten/Hoch, Z/X drehen, Leertaste HardDrop, Q quit");
                 
                 if (Console.KeyAvailable)
@@ -109,7 +189,7 @@ namespace TetrisMultiplayer.UI
                 }
             }
 
-            // Only redraw cells that have changed
+            // Only redraw cells that have changed - now with colors
             for (int y = 0; y < h; y++)
             {
                 for (int x = 0; x < w; x++)
@@ -117,24 +197,42 @@ namespace TetrisMultiplayer.UI
                     if (_lastRenderedGrid == null || _lastRenderedGrid[y, x] != currentGrid[y, x])
                     {
                         Console.SetCursorPosition(x * 2 + 1, y); // +1 for left border
-                        Console.Write(currentGrid[y, x] == 0 ? " ." : "[]");
+                        WriteColoredBlock(currentGrid[y, x]);
                     }
                 }
             }
 
-            // Draw borders only if not drawn before
+            // Draw colored borders only if not drawn before
             if (_lastRenderedGrid == null)
             {
-                // Draw field borders
-                for (int y = 0; y < h; y++)
+                try
                 {
-                    Console.SetCursorPosition(0, y);
-                    Console.Write("|");
-                    Console.SetCursorPosition(w * 2 + 1, y);
-                    Console.Write("|");
+                    // Farbige Ränder zeichnen
+                    Console.ForegroundColor = BorderColor;
+                    for (int y = 0; y < h; y++)
+                    {
+                        Console.SetCursorPosition(0, y);
+                        Console.Write("|");
+                        Console.SetCursorPosition(w * 2 + 1, y);
+                        Console.Write("|");
+                    }
+                    Console.SetCursorPosition(0, h);
+                    Console.Write("+" + new string('-', w * 2) + "+");
+                    Console.ResetColor();
                 }
-                Console.SetCursorPosition(0, h);
-                Console.Write("+" + new string('-', w * 2) + "+");
+                catch (Exception)
+                {
+                    // Fallback ohne Farbe
+                    for (int y = 0; y < h; y++)
+                    {
+                        Console.SetCursorPosition(0, y);
+                        Console.Write("|");
+                        Console.SetCursorPosition(w * 2 + 1, y);
+                        Console.Write("|");
+                    }
+                    Console.SetCursorPosition(0, h);
+                    Console.Write("+" + new string('-', w * 2) + "+");
+                }
             }
 
             _lastRenderedGrid = currentGrid;
@@ -160,9 +258,9 @@ namespace TetrisMultiplayer.UI
                 _lastScore = -1;
                 _lastStatusMsg = "";
                 
-                // Draw game title at top
+                // Draw colored game title at top
                 Console.SetCursorPosition(fieldLeft, 0);
-                Console.Write("=== TETRIS MULTIPLAYER ===");
+                WriteColored("=== TETRIS MULTIPLAYER ===", GameTitleColor);
             }
 
             // Create current grid with piece
@@ -178,7 +276,7 @@ namespace TetrisMultiplayer.UI
                 }
             }
 
-            // Only redraw field cells that have changed
+            // Only redraw field cells that have changed - now with colors
             for (int y = 0; y < h; y++)
             {
                 for (int x = 0; x < w; x++)
@@ -186,48 +284,66 @@ namespace TetrisMultiplayer.UI
                     if (_lastRenderedGrid == null || _lastRenderedGrid[y, x] != currentGrid[y, x])
                     {
                         Console.SetCursorPosition(fieldLeft + x * 2 + 1, fieldTop + y);
-                        Console.Write(currentGrid[y, x] == 0 ? " ." : "[]");
+                        WriteColoredBlock(currentGrid[y, x]);
                     }
                 }
             }
 
-            // Draw field borders only once
+            // Draw colored field borders only once
             if (_lastRenderedGrid == null)
             {
-                for (int y = 0; y < h; y++)
+                try
                 {
-                    Console.SetCursorPosition(fieldLeft, fieldTop + y);
-                    Console.Write("|");
-                    Console.SetCursorPosition(fieldLeft + w * 2 + 1, fieldTop + y);
-                    Console.Write("|");
+                    Console.ForegroundColor = BorderColor;
+                    for (int y = 0; y < h; y++)
+                    {
+                        Console.SetCursorPosition(fieldLeft, fieldTop + y);
+                        Console.Write("|");
+                        Console.SetCursorPosition(fieldLeft + w * 2 + 1, fieldTop + y);
+                        Console.Write("|");
+                    }
+                    Console.SetCursorPosition(fieldLeft, fieldTop + h);
+                    Console.Write("+" + new string('-', w * 2) + "+");
+                    Console.ResetColor();
                 }
-                Console.SetCursorPosition(fieldLeft, fieldTop + h);
-                Console.Write("+" + new string('-', w * 2) + "+");
+                catch (Exception)
+                {
+                    // Fallback ohne Farbe
+                    for (int y = 0; y < h; y++)
+                    {
+                        Console.SetCursorPosition(fieldLeft, fieldTop + y);
+                        Console.Write("|");
+                        Console.SetCursorPosition(fieldLeft + w * 2 + 1, fieldTop + y);
+                        Console.Write("|");
+                    }
+                    Console.SetCursorPosition(fieldLeft, fieldTop + h);
+                    Console.Write("+" + new string('-', w * 2) + "+");
+                }
             }
 
-            // Draw next piece preview (4x4 grid) - optimized
+            // Draw colored next piece preview
             if (engine.Next != null)
             {
                 Console.SetCursorPosition(nextPieceLeft, fieldTop);
-                Console.Write("Next:");
+                WriteColored("Next:", StatusColor);
                 DrawOptimizedPreview(engine.Next, nextPieceLeft, nextPieceTop);
             }
 
-            // Update score only if changed
+            // Update colored score only if changed
             if (_lastScore != engine.Score)
             {
                 Console.SetCursorPosition(fieldLeft, fieldTop + h + 2);
-                Console.Write($"Score: {engine.Score}".PadRight(20));
+                WriteColored($"Score: {engine.Score}".PadRight(20), ScoreColor);
                 _lastScore = engine.Score;
             }
 
-            // Enhanced leaderboard with real-time status
+            // Enhanced leaderboard with colors and real-time status
             if (_lastLeaderboard == null || !LeaderboardEquals(_lastLeaderboard, leaderboard) || playersWhoPlaced != null)
             {
                 Console.SetCursorPosition(leaderboardLeft, leaderboardTop);
-                Console.Write("Real-time Leaderboard:".PadRight(40));
+                WriteColored("Real-time Leaderboard:".PadRight(40), LeaderboardHeaderColor);
                 Console.SetCursorPosition(leaderboardLeft, leaderboardTop + 1);
-                Console.Write("Name        Score   HP   Status      State".PadRight(40));
+                WriteColored("Name        Score   HP   Status      State".PadRight(40), LeaderboardHeaderColor);
                 
                 int row = 2;
                 foreach (var entry in leaderboard)
@@ -256,8 +372,12 @@ namespace TetrisMultiplayer.UI
                         state = "Active";
                     }
                     
+                    // Farbige Leaderboard-Einträge
+                    ConsoleColor entryColor = entry.IsSpectator ? ConsoleColor.Gray : 
+                                            (entry.Name == selfName ? ConsoleColor.Yellow : ConsoleColor.White);
+                    
                     string line = $"{marker}{displayName,-10} {entry.Score,5} {entry.Hp,3} {status,-9} {state,-6}";
-                    Console.Write(line.PadRight(40));
+                    WriteColored(line.PadRight(40), entryColor);
                     row++;
                 }
                 
@@ -274,11 +394,11 @@ namespace TetrisMultiplayer.UI
                 _lastLeaderboard = new List<(string, int, int, bool)>(leaderboard);
             }
 
-            // Update status message only if changed
+            // Update colored status message only if changed
             if (_lastStatusMsg != statusMsg)
             {
                 Console.SetCursorPosition(fieldLeft, fieldTop + h + 4);
-                Console.Write(statusMsg.PadRight(60));
+                WriteColored(statusMsg.PadRight(60), StatusColor);
                 _lastStatusMsg = statusMsg;
             }
 
@@ -402,12 +522,22 @@ namespace TetrisMultiplayer.UI
                         _lastPreviewGrid[y, x] = (int)nextPiece.Type + 1;
                 }
                 
-                // Draw the cached preview with proper sizing
+                // Draw the cached preview with colors
                 for (int py = 0; py < previewSize; py++)
                 {
                     Console.SetCursorPosition(previewLeft, previewTop + py);
                     for (int px = 0; px < previewSize; px++)
-                        Console.Write(_lastPreviewGrid[py, px] == 0 ? "  " : "[]");
+                    {
+                        if (_lastPreviewGrid[py, px] == 0)
+                        {
+                            Console.Write("  ");
+                        }
+                        else
+                        {
+                            // Farbige Vorschau-Blöcke
+                            WriteColoredBlock(_lastPreviewGrid[py, px]);
+                        }
+                    }
                 }
             }
         }
@@ -427,16 +557,37 @@ namespace TetrisMultiplayer.UI
         public static void DrawFieldRaw(int[,] grid)
         {
             int h = grid.GetLength(0), w = grid.GetLength(1);
-            for (int y = 0; y < h; y++)
+            try
             {
-                Console.Write("|");
-                for (int x = 0; x < w; x++)
+                Console.ForegroundColor = BorderColor;
+                for (int y = 0; y < h; y++)
                 {
-                    Console.Write(grid[y, x] == 0 ? " ." : "[]");
+                    Console.Write("|");
+                    Console.ResetColor();
+                    for (int x = 0; x < w; x++)
+                    {
+                        WriteColoredBlock(grid[y, x]);
+                    }
+                    Console.ForegroundColor = BorderColor;
+                    Console.WriteLine("|");
                 }
-                Console.WriteLine("|");
+                Console.WriteLine("+" + new string('-', w * 2) + "+");
+                Console.ResetColor();
             }
-            Console.WriteLine("+" + new string('-', w * 2) + "+");
+            catch (Exception)
+            {
+                // Fallback ohne Farbe
+                for (int y = 0; y < h; y++)
+                {
+                    Console.Write("|");
+                    for (int x = 0; x < w; x++)
+                    {
+                        Console.Write(grid[y, x] == 0 ? " ." : "[]");
+                    }
+                    Console.WriteLine("|");
+                }
+                Console.WriteLine("+" + new string('-', w * 2) + "+");
+            }
         }
     }
 }
