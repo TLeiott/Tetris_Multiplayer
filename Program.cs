@@ -964,7 +964,7 @@ namespace TetrisMultiplayer
                                         var score = realtimeScores.GetValueOrDefault(id, 0);
                                         if (id == playerId)
                                             score = Math.Max(score, engine.Score);
-                                        return (id, score, realtimeHp.GetValueOrDefault(id, 20), realtimeSpectators.Contains(id));
+                                        return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                     }).ToList()
                                     : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
                                 
