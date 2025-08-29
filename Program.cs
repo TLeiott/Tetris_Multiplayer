@@ -917,11 +917,46 @@ namespace TetrisMultiplayer
         static async Task<bool> RunAutoDiscovery(NetworkManager network, string playerName, CancellationToken cancellationToken)
         {
             Console.WriteLine("\nSearching for available hosts in local network...");
-            Console.WriteLine("(Press Ctrl+C to cancel and return to menu)");
+            Console.WriteLine("(Press any key to cancel and return to menu)");
             
             try
             {
-                var lobbies = await network.DiscoverLobbies(8000, cancellationToken); // 8 second timeout
+                // Use a local cancellation token that we can control independently
+                using var localCts = new CancellationTokenSource();
+                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, localCts.Token);
+                
+                // Start the discovery task
+                var discoveryTask = network.DiscoverLobbies(8000, combinedCts.Token);
+                
+                // Monitor for user input in parallel
+                var inputTask = Task.Run(async () =>
+                {
+                    while (!combinedCts.Token.IsCancellationRequested)
+                    {
+                        if (Console.KeyAvailable)
+                        {
+                            Console.ReadKey(true); // Consume the key
+                            localCts.Cancel(); // Cancel the local operation
+                            return;
+                        }
+                        await Task.Delay(100, combinedCts.Token);
+                    }
+                }, combinedCts.Token);
+                
+                // Wait for either discovery to complete or user to cancel
+                var completedTask = await Task.WhenAny(discoveryTask, inputTask);
+                
+                // If user cancelled, handle it gracefully
+                if (completedTask == inputTask || localCts.Token.IsCancellationRequested)
+                {
+                    localCts.Cancel(); // Ensure both tasks are cancelled
+                    Console.WriteLine("\nDiscovery cancelled. Returning to main menu...");
+                    await Task.Delay(1000);
+                    return true; // Return to main menu
+                }
+                
+                // Get the discovery results
+                var lobbies = await discoveryTask;
                 
                 if (lobbies.Count > 0)
                 {
@@ -1018,8 +1053,14 @@ namespace TetrisMultiplayer
                     }
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // This means the main program was cancelled, not just discovery
+                return false; // Exit program
+            }
             catch (OperationCanceledException)
             {
+                // This means discovery was cancelled locally (user pressed a key)
                 Console.WriteLine("\nDiscovery cancelled. Returning to main menu...");
                 await Task.Delay(1000);
                 return true; // Return to main menu
