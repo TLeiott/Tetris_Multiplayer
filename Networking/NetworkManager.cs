@@ -1116,9 +1116,10 @@ namespace TetrisMultiplayer.Networking
             UdpClient? client = null;
             try
             {
-                // Use proper UdpClient constructor that binds to the port automatically
+                // Fix: Use dynamic port allocation to avoid conflicts between multiple clients
                 try
                 {
+                    // Try to bind to the discovery port first
                     client = new UdpClient(DISCOVERY_PORT);
                     client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                     Console.WriteLine($"Listening on UDP port {DISCOVERY_PORT} for lobby broadcasts...");
@@ -1126,15 +1127,33 @@ namespace TetrisMultiplayer.Networking
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
                 {
-                    LogDebugToFile($"Port {DISCOVERY_PORT} is already in use: {ex.Message}");
-                    Console.WriteLine($"Discovery error: Port {DISCOVERY_PORT} is already in use. Another client may be running.");
-                    Console.WriteLine("Try closing other instances or wait a moment before retrying.");
-                    return lobbies; // Return empty list instead of crashing
+                    LogDebugToFile($"Port {DISCOVERY_PORT} is busy, trying alternative discovery method...");
+                    Console.WriteLine($"Port {DISCOVERY_PORT} is busy (another client running). Using alternative discovery...");
+                    
+                    // Alternative: Use any available port and try to receive broadcasts
+                    try
+                    {
+                        client = new UdpClient(0); // Let system choose port
+                        var localEndpoint = (IPEndPoint)client.Client.LocalEndPoint!;
+                        Console.WriteLine($"Using port {localEndpoint.Port} for discovery...");
+                        LogDebugToFile($"Using alternative port {localEndpoint.Port} for discovery");
+                        
+                        // Bind to any address to receive broadcasts
+                        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, true);
+                    }
+                    catch (Exception altEx)
+                    {
+                        LogDebugToFile($"Alternative discovery method also failed: {altEx.Message}");
+                        Console.WriteLine("Discovery unavailable. Please use manual IP connection.");
+                        return lobbies;
+                    }
                 }
                 catch (SocketException ex)
                 {
-                    LogDebugToFile($"Failed to bind to port {DISCOVERY_PORT}: {ex.Message}");
-                    Console.WriteLine($"Discovery error: Could not bind to discovery port {DISCOVERY_PORT}. {ex.Message}");
+                    LogDebugToFile($"Failed to bind for discovery: {ex.Message}");
+                    Console.WriteLine($"Discovery error: Could not set up UDP listener. {ex.Message}");
+                    Console.WriteLine("Please use manual IP connection instead.");
                     return lobbies; // Return empty list instead of crashing
                 }
                 

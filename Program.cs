@@ -254,35 +254,63 @@ namespace TetrisMultiplayer
                 Console.WriteLine("Network info not available, but host is running normally.");
             }
 
-            // Show available IPs for manual connection
+            // Show available IPs for manual connection with clear formatting
             List<string> localIPs = new List<string>();
             try
             {
                 localIPs = Dns.GetHostAddresses(Dns.GetHostName())
-                    .Where(ip => ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    .Where(ip => ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
                     .Select(ip => ip.ToString()).ToList();
-                Console.WriteLine("Your IPv4 addresses for manual connection:");
-                foreach (var ip in localIPs)
+                
+                if (localIPs.Count > 0)
                 {
-                    var priority = "";
-                    if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
-                        priority = " (LAN - best choice)";
-                    else if (ip.StartsWith("100.") || ip.StartsWith("25."))
-                        priority = " (VPN - might work)";
-                    else if (!ip.StartsWith("127."))
-                        priority = " (public/other)";
-                        
-                    Console.WriteLine($"  {ip}:{port}{priority}");
+                    Console.WriteLine("\n╔══════════════════════════════════════════════════════════════════╗");
+                    Console.WriteLine("║                    HOST CONNECTION INFORMATION                  ║");
+                    Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
+                    Console.WriteLine("║ Give these addresses to clients for manual connection:          ║");
+                    
+                    // Sort IPs by priority (LAN first, then VPN, then others)
+                    var sortedIPs = localIPs.OrderBy(ip => 
+                    {
+                        if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172.")) return 1; // LAN - highest priority
+                        if (ip.StartsWith("100.") || ip.StartsWith("25.")) return 2; // VPN - medium priority  
+                        return 3; // Others - lowest priority
+                    }).ToList();
+                    
+                    foreach (var ip in sortedIPs)
+                    {
+                        var priority = "";
+                        var recommendation = "";
+                        if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || (ip.StartsWith("172.") && ip.Split('.').Length > 1 && int.TryParse(ip.Split('.')[1], out int second) && second >= 16 && second <= 31))
+                        {
+                            priority = "LAN";
+                            recommendation = "★ RECOMMENDED";
+                        }
+                        else if (ip.StartsWith("100.") || ip.StartsWith("25."))
+                        {
+                            priority = "VPN";
+                            recommendation = "◆ VPN NETWORK";
+                        }
+                        else
+                        {
+                            priority = "Other";
+                            recommendation = "◇ Alternative";
+                        }
+                            
+                        Console.WriteLine($"║ {$"{ip}:{port}".PadRight(25)} │ {priority.PadRight(5)} │ {recommendation.PadRight(15)} ║");
+                    }
+                    Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
                 }
             }
             catch (Exception ex)
             {
                 logger.LogWarning($"Could not enumerate IP addresses: {ex.Message}");
-                Console.WriteLine($"Host is running on port {port}");
+                Console.WriteLine($"\n🌐 Host is running on port {port}");
+                Console.WriteLine("🔍 Use network tools to find this computer's IP address for client connections");
             }
 
-            Console.WriteLine("Lobby discovery active - clients can find this host automatically.");
-            Console.WriteLine("Host started successfully - ready for players!");
+            Console.WriteLine("\n🔊 Auto-discovery is active - clients can find this host automatically");
+            Console.WriteLine("✅ Host started successfully - ready for players!");
 
             // Host-Name speichern
             var playerNames = new Dictionary<string, string>();
@@ -769,16 +797,55 @@ namespace TetrisMultiplayer
             var network = new NetworkManager();
             var cts = new CancellationTokenSource();
             
-            Console.WriteLine("Searching for available lobbies in local network...");
-            Console.WriteLine("(This may take longer on VPN networks or complex network setups)");
+            // Offer both options upfront for better user experience
+            Console.WriteLine("╔══════════════════════════════════════════════════════════════════╗");
+            Console.WriteLine("║                       CONNECTION OPTIONS                        ║");
+            Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
+            Console.WriteLine("║ [1] Auto-discover hosts (scan local network)                    ║");
+            Console.WriteLine("║ [2] Manual IP connection (enter host address directly)          ║");
+            Console.WriteLine("║ [0] Exit                                                         ║");
+            Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
+            Console.WriteLine("\nFor VPN/complex networks, option [2] is recommended.");
+            Console.Write("Selection: ");
+            
+            string? choiceInput = Console.ReadLine();
+            if (!int.TryParse(choiceInput, out int choice))
+            {
+                Console.WriteLine("Invalid input. Exiting.");
+                return;
+            }
+            
+            switch (choice)
+            {
+                case 0:
+                    return; // Exit
+                
+                case 1:
+                    await RunAutoDiscovery(network, playerName, cts.Token);
+                    break;
+                    
+                case 2:
+                    await ManualIPConnection(network, playerName, cts.Token);
+                    break;
+                    
+                default:
+                    Console.WriteLine("Invalid selection. Exiting.");
+                    return;
+            }
+        }
+        
+        static async Task RunAutoDiscovery(NetworkManager network, string playerName, CancellationToken cancellationToken)
+        {
+            Console.WriteLine("\nSearching for available hosts in local network...");
+            Console.WriteLine("(Press Ctrl+C to cancel and try manual connection)");
             
             try
             {
-                var lobbies = await network.DiscoverLobbies(10000, cts.Token); // Increased timeout for better discovery
+                var lobbies = await network.DiscoverLobbies(8000, cancellationToken); // 8 second timeout
                 
                 if (lobbies.Count > 0)
                 {
-                    Console.WriteLine($"\n{lobbies.Count} lobby(s) found:");
+                    Console.WriteLine($"\n{lobbies.Count} host(s) found:");
                     Console.WriteLine("╔════════════════════════════════════════════════════════════════╗");
                     for (int i = 0; i < lobbies.Count; i++)
                     {
@@ -786,7 +853,7 @@ namespace TetrisMultiplayer
                         Console.WriteLine($"║ [{i + 1}] {lobby.HostName.PadRight(20)} │ {lobby.IpAddress.PadRight(15)} │ {lobby.PlayerCount}/{lobby.MaxPlayers} players ║");
                     }
                     Console.WriteLine("╚════════════════════════════════════════════════════════════════╝");
-                    Console.WriteLine($"[{lobbies.Count + 1}] Manual IP entry");
+                    Console.WriteLine($"[{lobbies.Count + 1}] Manual IP entry instead");
                     Console.WriteLine("[0] Exit");
                     Console.Write("\nSelection: ");
                     
@@ -799,13 +866,12 @@ namespace TetrisMultiplayer
                         else if (choice > 0 && choice <= lobbies.Count)
                         {
                             var selectedLobby = lobbies[choice - 1];
-                            await ConnectToLobby(network, selectedLobby.IpAddress, selectedLobby.Port, playerName, cts.Token);
+                            await ConnectToLobby(network, selectedLobby.IpAddress, selectedLobby.Port, playerName, cancellationToken);
                             return;
                         }
                         else if (choice == lobbies.Count + 1)
                         {
-                            // Manual IP entry
-                            await ManualIPConnection(network, playerName, cts.Token);
+                            await ManualIPConnection(network, playerName, cancellationToken);
                             return;
                         }
                     }
@@ -815,57 +881,156 @@ namespace TetrisMultiplayer
                 }
                 else
                 {
-                    Console.WriteLine("No lobbies found in local network.");
+                    Console.WriteLine("\n❌ No hosts found automatically.");
                     Console.WriteLine("\nPossible reasons:");
-                    Console.WriteLine("- No hosts active in network");
-                    Console.WriteLine("- VPN network blocks broadcasts");
-                    Console.WriteLine("- Firewall blocks UDP port 5001");
-                    Console.WriteLine("- Different network segments");
-                    Console.WriteLine("\nWould you like to enter an IP address manually? (y/n)");
+                    Console.WriteLine("• No hosts currently running in the network");
+                    Console.WriteLine("• VPN network blocks UDP broadcasts");
+                    Console.WriteLine("• Firewall blocks discovery traffic");
+                    Console.WriteLine("• Host and client on different network segments");
+                    
+                    Console.WriteLine("\n╔══════════════════════════════════════════════════════════════════╗");
+                    Console.WriteLine("║ Would you like to try manual IP connection instead?             ║");
+                    Console.WriteLine("║ [y] Yes, enter IP manually    [n] No, exit                      ║");
+                    Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
+                    Console.Write("Choice: ");
                     
                     var response = Console.ReadLine()?.ToLower();
                     if (response == "y" || response == "yes" || response == "j" || response == "ja")
                     {
-                        await ManualIPConnection(network, playerName, cts.Token);
+                        await ManualIPConnection(network, playerName, cancellationToken);
                     }
                     return;
                 }
             }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("\nDiscovery cancelled. Switching to manual IP entry...");
+                await ManualIPConnection(network, playerName, cancellationToken);
+            }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during lobby search: {ex.Message}");
-                Console.WriteLine("Falling back to manual IP entry...");
-                await ManualIPConnection(network, playerName, cts.Token);
+                Console.WriteLine($"\n❌ Discovery failed: {ex.Message}");
+                Console.WriteLine("Switching to manual IP connection...");
+                await ManualIPConnection(network, playerName, cancellationToken);
             }
         }
 
         static async Task ManualIPConnection(NetworkManager network, string playerName, CancellationToken cancellationToken)
         {
-            Console.WriteLine("Bitte Host-IP eingeben:");
+            Console.WriteLine("\n╔══════════════════════════════════════════════════════════════════╗");
+            Console.WriteLine("║                      MANUAL IP CONNECTION                       ║");
+            Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
+            Console.WriteLine();
+            Console.WriteLine("Examples of IP addresses to try:");
+            Console.WriteLine("• Local network: 192.168.1.100, 10.0.0.50");
+            Console.WriteLine("• VPN addresses: 100.76.82.47, 25.33.62.176");
+            Console.WriteLine("• Same computer: 127.0.0.1 or localhost");
+            Console.WriteLine();
+            Console.Write("Enter host IP address: ");
+            
             string? ip = Console.ReadLine();
             if (string.IsNullOrWhiteSpace(ip))
             {
-                Console.WriteLine("Ungültige IP-Adresse.");
+                Console.WriteLine("❌ No IP address entered. Exiting.");
                 return;
             }
             
+            // Clean up the input
+            ip = ip.Trim();
+            
+            // Support common shortcuts
+            if (ip.ToLower() == "localhost" || ip == "local")
+            {
+                ip = "127.0.0.1";
+                Console.WriteLine($"Using localhost: {ip}");
+            }
+            
+            // Validate IP format
+            if (!IPAddress.TryParse(ip, out IPAddress? parsedIP))
+            {
+                Console.WriteLine($"❌ Invalid IP address format: {ip}");
+                Console.WriteLine("Please enter a valid IP address (e.g., 192.168.1.100)");
+                return;
+            }
+            
+            Console.Write("Enter port (default 5000): ");
+            string? portInput = Console.ReadLine();
             int port = 5000;
+            
+            if (!string.IsNullOrWhiteSpace(portInput) && !int.TryParse(portInput, out port))
+            {
+                Console.WriteLine("❌ Invalid port number. Using default port 5000.");
+                port = 5000;
+            }
+            
+            if (port < 1 || port > 65535)
+            {
+                Console.WriteLine("❌ Port must be between 1 and 65535. Using default port 5000.");
+                port = 5000;
+            }
+            
+            Console.WriteLine($"\n🔄 Attempting to connect to {ip}:{port}...");
+            Console.WriteLine("(This may take a moment...)");
+            
             await ConnectToLobby(network, ip, port, playerName, cancellationToken);
         }
 
         static async Task ConnectToLobby(NetworkManager network, string ip, int port, string playerName, CancellationToken cancellationToken)
         {
+            var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
-                Console.WriteLine($"Verbinde zu {ip}:{port} ...");
-                await network.ConnectToHost(ip, port, playerName, cancellationToken);
-                Console.WriteLine("Verbunden. Warte auf Lobby...");
-                // Lobby-Status anzeigen
+                Console.WriteLine($"\n🔄 Connecting to {ip}:{port}...");
+                
+                // Add timeout for connection attempt
+                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                
+                await network.ConnectToHost(ip, port, playerName, combinedCts.Token);
+                
+                Console.WriteLine("✅ Connected successfully!");
+                Console.WriteLine("🎮 Entering lobby...");
+                
+                // Enter lobby loop
                 await ClientLobbyLoop(network, cancellationToken, playerName);
+            }
+            catch (OperationCanceledException) when (timeoutCts.Token.IsCancellationRequested)
+            {
+                Console.WriteLine($"❌ Connection timeout. The host at {ip}:{port} did not respond within 10 seconds.");
+                Console.WriteLine("\nPossible issues:");
+                Console.WriteLine("• Host is not running at this address");
+                Console.WriteLine("• Firewall blocking the connection");
+                Console.WriteLine("• Wrong IP address or port");
+                Console.WriteLine("• Network connectivity issues");
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("Connection cancelled by user.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Verbindung fehlgeschlagen: {ex.Message}");
+                Console.WriteLine($"❌ Connection failed: {ex.Message}");
+                
+                // Provide specific help based on error type
+                if (ex.Message.Contains("No connection could be made") || ex.Message.Contains("refused"))
+                {
+                    Console.WriteLine("\nThis usually means:");
+                    Console.WriteLine("• No host is running at this address");
+                    Console.WriteLine("• The host is using a different port");
+                    Console.WriteLine("• Firewall is blocking the connection");
+                }
+                else if (ex.Message.Contains("timeout"))
+                {
+                    Console.WriteLine("\nThis usually means:");
+                    Console.WriteLine("• Network is slow or unreliable");
+                    Console.WriteLine("• Host is overloaded");
+                    Console.WriteLine("• Connection was blocked by network infrastructure");
+                }
+                
+                Console.WriteLine($"\nTip: Ask the host to confirm they are running and their IP address is {ip}");
+            }
+            finally
+            {
+                timeoutCts?.Dispose();
             }
         }
 
