@@ -854,56 +854,70 @@ namespace TetrisMultiplayer
             var network = new NetworkManager();
             var cts = new CancellationTokenSource();
             
-            // Offer both options upfront for better user experience - using proper UI drawing
-            Console.Clear();
-            int boxWidth = 66;
-            int startX = (Console.WindowWidth - boxWidth - 2) / 2; // Center horizontally
-            int startY = 3;
-            
-            var connectionOptions = new List<string>
+            // Connection options loop - allows returning to menu instead of exiting
+            while (!cts.Token.IsCancellationRequested)
             {
-                " [1] Auto-discover hosts (scan local network)                    ",
-                " [2] Manual IP connection (enter host address directly)          ",
-                " [0] Exit                                                         "
-            };
-            
-            DrawUIBox(startX, startY, boxWidth, "CONNECTION OPTIONS", connectionOptions);
-            
-            Console.SetCursorPosition(startX, startY + connectionOptions.Count + 5);
-            Console.Write("For VPN/complex networks, option [2] is recommended.");
-            Console.SetCursorPosition(startX, startY + connectionOptions.Count + 6);
-            Console.Write("Selection: ");
-            
-            string? choiceInput = Console.ReadLine();
-            if (!int.TryParse(choiceInput, out int choice))
-            {
-                Console.WriteLine("Invalid input. Exiting.");
-                return;
-            }
-            
-            switch (choice)
-            {
-                case 0:
-                    return; // Exit
+                // Show connection options menu
+                Console.Clear();
+                int boxWidth = 66;
+                int startX = (Console.WindowWidth - boxWidth - 2) / 2; // Center horizontally
+                int startY = 3;
                 
-                case 1:
-                    await RunAutoDiscovery(network, playerName, cts.Token);
-                    break;
+                var connectionOptions = new List<string>
+                {
+                    " [1] Auto-discover hosts (scan local network)                    ",
+                    " [2] Manual IP connection (enter host address directly)          ",
+                    " [0] Exit                                                         "
+                };
+                
+                DrawUIBox(startX, startY, boxWidth, "CONNECTION OPTIONS", connectionOptions);
+                
+                Console.SetCursorPosition(startX, startY + connectionOptions.Count + 5);
+                Console.Write("For VPN/complex networks, option [2] is recommended.");
+                Console.SetCursorPosition(startX, startY + connectionOptions.Count + 6);
+                Console.Write("Selection: ");
+                
+                string? choiceInput = Console.ReadLine();
+                if (!int.TryParse(choiceInput, out int choice))
+                {
+                    Console.WriteLine("Invalid input. Please try again.");
+                    await Task.Delay(1500);
+                    continue;
+                }
+                
+                switch (choice)
+                {
+                    case 0:
+                        return; // Exit
                     
-                case 2:
-                    await ManualIPConnection(network, playerName, cts.Token);
-                    break;
-                    
-                default:
-                    Console.WriteLine("Invalid selection. Exiting.");
-                    return;
+                    case 1:
+                        bool shouldReturnToMenu = await RunAutoDiscovery(network, playerName, cts.Token);
+                        if (!shouldReturnToMenu)
+                        {
+                            return; // Successfully connected or user chose to exit
+                        }
+                        break;
+                        
+                    case 2:
+                        bool shouldReturnToMenu2 = await ManualIPConnection(network, playerName, cts.Token);
+                        if (!shouldReturnToMenu2)
+                        {
+                            return; // Successfully connected or user chose to exit
+                        }
+                        break;
+                        
+                    default:
+                        Console.WriteLine("Invalid selection. Please try again.");
+                        await Task.Delay(1500);
+                        continue;
+                }
             }
         }
         
-        static async Task RunAutoDiscovery(NetworkManager network, string playerName, CancellationToken cancellationToken)
+        static async Task<bool> RunAutoDiscovery(NetworkManager network, string playerName, CancellationToken cancellationToken)
         {
             Console.WriteLine("\nSearching for available hosts in local network...");
-            Console.WriteLine("(Press Ctrl+C to cancel and try manual connection)");
+            Console.WriteLine("(Press Ctrl+C to cancel and return to menu)");
             
             try
             {
@@ -930,6 +944,7 @@ namespace TetrisMultiplayer
                     
                     Console.SetCursorPosition(0, startY + lobbyContent.Count + 2);
                     Console.WriteLine($"[{lobbies.Count + 1}] Manual IP entry instead");
+                    Console.WriteLine($"[{lobbies.Count + 2}] Return to main menu");
                     Console.WriteLine("[0] Exit");
                     Console.Write("\nSelection: ");
                     
@@ -937,23 +952,28 @@ namespace TetrisMultiplayer
                     {
                         if (choice == 0)
                         {
-                            return; // Exit
+                            return false; // Exit program
                         }
                         else if (choice > 0 && choice <= lobbies.Count)
                         {
                             var selectedLobby = lobbies[choice - 1];
                             await ConnectToLobby(network, selectedLobby.IpAddress, selectedLobby.Port, playerName, cancellationToken);
-                            return;
+                            return false; // Connection attempted, don't return to menu
                         }
                         else if (choice == lobbies.Count + 1)
                         {
-                            await ManualIPConnection(network, playerName, cancellationToken);
-                            return;
+                            bool shouldReturnToMenu = await ManualIPConnection(network, playerName, cancellationToken);
+                            return shouldReturnToMenu; // Forward the result from manual connection
+                        }
+                        else if (choice == lobbies.Count + 2)
+                        {
+                            return true; // Return to main menu
                         }
                     }
                     
-                    Console.WriteLine("Invalid selection.");
-                    return;
+                    Console.WriteLine("Invalid selection. Returning to menu...");
+                    await Task.Delay(1500);
+                    return true; // Return to menu
                 }
                 else
                 {
@@ -972,37 +992,48 @@ namespace TetrisMultiplayer
                     
                     var promptContent = new List<string>
                     {
-                        " Would you like to try manual IP connection instead?             ",
-                        " [y] Yes, enter IP manually    [n] No, exit                      "
+                        " [y] Yes, try manual IP connection                               ",
+                        " [m] Return to main menu                                        ",
+                        " [n] No, exit program                                           "
                     };
                     
-                    DrawUIBox(startX, startY, boxWidth, "", promptContent);
+                    DrawUIBox(startX, startY, boxWidth, "What would you like to do?", promptContent);
                     
                     Console.SetCursorPosition(startX, startY + promptContent.Count + 2);
                     Console.Write("Choice: ");
                     
-                    var response = Console.ReadLine()?.ToLower();
+                    var response = Console.ReadLine()?.ToLower().Trim();
                     if (response == "y" || response == "yes" || response == "j" || response == "ja")
                     {
-                        await ManualIPConnection(network, playerName, cancellationToken);
+                        bool shouldReturnToMenu = await ManualIPConnection(network, playerName, cancellationToken);
+                        return shouldReturnToMenu; // Forward the result from manual connection
                     }
-                    return;
+                    else if (response == "m" || response == "menu")
+                    {
+                        return true; // Return to main menu
+                    }
+                    else
+                    {
+                        return false; // Exit program
+                    }
                 }
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine("\nDiscovery cancelled. Switching to manual IP entry...");
-                await ManualIPConnection(network, playerName, cancellationToken);
+                Console.WriteLine("\nDiscovery cancelled. Returning to main menu...");
+                await Task.Delay(1000);
+                return true; // Return to main menu
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"\n❌ Discovery failed: {ex.Message}");
-                Console.WriteLine("Switching to manual IP connection...");
-                await ManualIPConnection(network, playerName, cancellationToken);
+                Console.WriteLine("Returning to main menu...");
+                await Task.Delay(1500);
+                return true; // Return to main menu on error
             }
         }
 
-        static async Task ManualIPConnection(NetworkManager network, string playerName, CancellationToken cancellationToken)
+        static async Task<bool> ManualIPConnection(NetworkManager network, string playerName, CancellationToken cancellationToken)
         {
             Console.Clear();
             
@@ -1023,17 +1054,31 @@ namespace TetrisMultiplayer
             Console.WriteLine("• VPN addresses: 100.76.82.47, 25.33.62.176");
             Console.WriteLine("• Same computer: 127.0.0.1 or localhost");
             Console.WriteLine();
+            Console.WriteLine("Enter 'menu' to return to main menu, or 'exit' to quit.");
+            Console.WriteLine();
             Console.Write("Enter host IP address: ");
             
             string? ip = Console.ReadLine();
             if (string.IsNullOrWhiteSpace(ip))
             {
-                Console.WriteLine("❌ No IP address entered. Exiting.");
-                return;
+                Console.WriteLine("❌ No IP address entered. Returning to menu...");
+                await Task.Delay(1500);
+                return true; // Return to menu
             }
             
             // Clean up the input
             ip = ip.Trim();
+            
+            // Check for special commands
+            if (ip.ToLower() == "menu" || ip.ToLower() == "m")
+            {
+                return true; // Return to main menu
+            }
+            
+            if (ip.ToLower() == "exit" || ip.ToLower() == "quit" || ip.ToLower() == "q")
+            {
+                return false; // Exit program
+            }
             
             // Support common shortcuts
             if (ip.ToLower() == "localhost" || ip == "local")
@@ -1047,7 +1092,9 @@ namespace TetrisMultiplayer
             {
                 Console.WriteLine($"❌ Invalid IP address format: {ip}");
                 Console.WriteLine("Please enter a valid IP address (e.g., 192.168.1.100)");
-                return;
+                Console.WriteLine("Returning to menu in 3 seconds...");
+                await Task.Delay(3000);
+                return true; // Return to menu
             }
             
             Console.Write("Enter port (default 5000): ");
@@ -1070,6 +1117,7 @@ namespace TetrisMultiplayer
             Console.WriteLine("(This may take a moment...)");
             
             await ConnectToLobby(network, ip, port, playerName, cancellationToken);
+            return false; // Connection attempted, don't return to menu
         }
 
         static async Task ConnectToLobby(NetworkManager network, string ip, int port, string playerName, CancellationToken cancellationToken)
@@ -1135,40 +1183,94 @@ namespace TetrisMultiplayer
         {
             List<PlayerState> lastPlayers = new();
             bool gameStarted = false;
+            DateTime lastLobbyUpdate = DateTime.Now;
             
             GameLogger.LogDebug("[Client] Starting lobby loop, waiting for StartGame message");
             
+            // Initial lobby display
+            Console.Clear();
+            Console.WriteLine("--- Lobby (Client) ---");
+            Console.WriteLine("Verbindungsstatus: Verbunden");
+            Console.WriteLine("Warte auf Host zum Starten des Spiels...");
+            Console.WriteLine("(Host drückt [S] zum Starten)");
+            
             while (!cancellationToken.IsCancellationRequested && !gameStarted)
             {
-                // Check if game started FIRST (GameManager set by StartGame message in NetworkManager)
+                // Check if game started FIRST - this is critical for proper transition
                 if (network.GameManager != null && !gameStarted)
                 {
                     GameLogger.LogDebug("[Client] GameManager detected, transitioning to game");
                     gameStarted = true;
+                    
+                    // Clear screen and show transition message
+                    Console.Clear();
+                    Console.WriteLine("🎮 Game starting...");
+                    Console.WriteLine("   Preparing game engine...");
+                    await Task.Delay(1000); // Give more time to see the transition
+                    
                     await ClientGameLoop(network, cancellationToken, playerName);
                     break;
                 }
                 
-                // Wait for lobby update messages (non-blocking)
-                var msg = await network.ReceiveLobbyUpdateAsync(cancellationToken);
-                if (msg != null)
+                // Try to receive lobby update messages with a short timeout (non-blocking)
+                try
                 {
-                    lastPlayers = msg.Players;
-                    Console.Clear();
-                    Console.WriteLine("--- Lobby (Client) ---");
-                    Console.WriteLine("Verbindungsstatus: Verbunden");
-                    Console.WriteLine("Spieler:");
-                    foreach (var p in lastPlayers)
+                    var msg = await network.ReceiveLobbyUpdateAsync(cancellationToken);
+                    if (msg != null)
                     {
-                        Console.WriteLine($"  Name: {p.Name}, ID: {p.PlayerId}, HP: {p.Hp}");
+                        lastPlayers = msg.Players;
+                        lastLobbyUpdate = DateTime.Now;
+                        
+                        Console.Clear();
+                        Console.WriteLine("--- Lobby (Client) ---");
+                        Console.WriteLine("Verbindungsstatus: Verbunden");
+                        Console.WriteLine("Spieler:");
+                        foreach (var p in lastPlayers)
+                        {
+                            Console.WriteLine($"  Name: {p.Name}, ID: {p.PlayerId}, HP: {p.Hp}");
+                        }
+                        Console.WriteLine();
+                        Console.WriteLine("Warte auf Host zum Starten des Spiels...");
+                        Console.WriteLine("(Host drückt [S] zum Starten)");
                     }
-                    Console.WriteLine();
-                    Console.WriteLine("Warte auf Host zum Starten des Spiels...");
+                    else
+                    {
+                        // No lobby update received, but periodically refresh to show we're waiting
+                        if ((DateTime.Now - lastLobbyUpdate).TotalSeconds > 5)
+                        {
+                            Console.Clear();
+                            Console.WriteLine("--- Lobby (Client) ---");
+                            Console.WriteLine("Verbindungsstatus: Verbunden");
+                            if (lastPlayers.Count > 0)
+                            {
+                                Console.WriteLine("Spieler:");
+                                foreach (var p in lastPlayers)
+                                {
+                                    Console.WriteLine($"  Name: {p.Name}, ID: {p.PlayerId}, HP: {p.Hp}");
+                                }
+                            }
+                            Console.WriteLine();
+                            Console.WriteLine("Warte auf Host zum Starten des Spiels...");
+                            Console.WriteLine("(Host drückt [S] zum Starten)");
+                            Console.WriteLine($"[Listening for StartGame message...]");
+                            lastLobbyUpdate = DateTime.Now;
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    GameLogger.LogDebug($"[Client] Error receiving lobby update: {ex.Message}");
                 }
                 
-                // Shorter delay for more responsive transition
-                await Task.Delay(100, cancellationToken);
+                // Very short delay for maximum responsiveness to StartGame message
+                await Task.Delay(25, cancellationToken);
             }
+            
+            GameLogger.LogDebug("[Client] Exiting lobby loop");
         }
 
         static async Task ClientGameLoop(NetworkManager network, CancellationToken cancellationToken, string playerName)
