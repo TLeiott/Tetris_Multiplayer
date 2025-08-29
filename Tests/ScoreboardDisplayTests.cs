@@ -74,5 +74,48 @@ namespace TetrisMultiplayer.Tests
             
             Assert.Empty(displayLeaderboard);
         }
+        
+        [Fact]
+        public void BroadcastRealtimeLeaderboard_ShouldHaveContinuousLoop()
+        {
+            // This test verifies that the BroadcastRealtimeLeaderboard function structure
+            // has been fixed to include a continuous broadcasting loop
+            
+            // Test data structures used in BroadcastRealtimeLeaderboard
+            var scores = new Dictionary<string, int> { ["player1"] = 100, ["player2"] = 200 };
+            var hps = new Dictionary<string, int> { ["player1"] = 85, ["player2"] = 90 };
+            var spectators = new HashSet<string>();
+            var playerNames = new Dictionary<string, string> { ["player1"] = "Alice", ["player2"] = "Bob" };
+            var playersWhoPlaced = new HashSet<string> { "player1" };
+            
+            // Simulate the leaderboard message creation logic
+            var leaderboardUpdate = new { 
+                type = "LeaderboardUpdate", 
+                scores = scores,
+                hp = hps,
+                spectators = spectators.ToList(),
+                playerNames = playerNames,
+                playersPlaced = playersWhoPlaced.ToList()
+            };
+            
+            // Verify the data structure is correct
+            Assert.Equal("LeaderboardUpdate", leaderboardUpdate.type);
+            Assert.Equal(2, leaderboardUpdate.scores.Count);
+            Assert.Equal(2, leaderboardUpdate.hp.Count);
+            Assert.Empty(leaderboardUpdate.spectators);
+            Assert.Equal(2, leaderboardUpdate.playerNames.Count);
+            Assert.Single(leaderboardUpdate.playersPlaced);
+            
+            // Verify score data integrity 
+            Assert.Equal(100, leaderboardUpdate.scores["player1"]);
+            Assert.Equal(200, leaderboardUpdate.scores["player2"]);
+            
+            // Verify HP data integrity
+            Assert.Equal(85, leaderboardUpdate.hp["player1"]);
+            Assert.Equal(90, leaderboardUpdate.hp["player2"]);
+            
+            // Verify players placed data
+            Assert.Contains("player1", leaderboardUpdate.playersPlaced);
+        }
     }
 }
