@@ -128,6 +128,58 @@ namespace TetrisMultiplayer
 
     internal partial class Program
     {
+        // Helper method to draw UI boxes using SetCursorPosition for proper alignment
+        static void DrawUIBox(int startX, int startY, int width, string title, List<string> content, bool hasBottomBorder = true)
+        {
+            // Ensure console buffer is large enough (Windows only)
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    if (Console.BufferHeight < startY + content.Count + 4)
+                    {
+                        Console.BufferHeight = startY + content.Count + 10;
+                    }
+                    if (Console.BufferWidth < startX + width + 2)
+                    {
+                        Console.BufferWidth = startX + width + 10;
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore buffer resize errors - not critical for functionality
+            }
+
+            // Draw top border
+            Console.SetCursorPosition(startX, startY);
+            Console.Write("╔" + new string('═', width) + "╗");
+            
+            // Draw title
+            if (!string.IsNullOrEmpty(title))
+            {
+                Console.SetCursorPosition(startX, startY + 1);
+                Console.Write("║" + title.PadLeft((width + title.Length) / 2).PadRight(width) + "║");
+                Console.SetCursorPosition(startX, startY + 2);
+                Console.Write("╠" + new string('═', width) + "╣");
+            }
+            
+            // Draw content lines
+            int contentStartY = startY + (string.IsNullOrEmpty(title) ? 1 : 3);
+            for (int i = 0; i < content.Count; i++)
+            {
+                Console.SetCursorPosition(startX, contentStartY + i);
+                Console.Write("║" + content[i].PadRight(width) + "║");
+            }
+            
+            // Draw bottom border
+            if (hasBottomBorder)
+            {
+                Console.SetCursorPosition(startX, contentStartY + content.Count);
+                Console.Write("╚" + new string('═', width) + "╝");
+            }
+        }
+
         static void Main(string[] args)
         {
             // Ensure required directories exist
@@ -264,10 +316,14 @@ namespace TetrisMultiplayer
                 
                 if (localIPs.Count > 0)
                 {
-                    Console.WriteLine("\n╔══════════════════════════════════════════════════════════════════╗");
-                    Console.WriteLine("║                    HOST CONNECTION INFORMATION                  ║");
-                    Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
-                    Console.WriteLine("║ Give these addresses to clients for manual connection:          ║");
+                    Console.SetCursorPosition(0, Console.CursorTop + 1);
+                    
+                    int boxWidth = 66;
+                    int startX = 2;
+                    int startY = Console.CursorTop;
+                    
+                    var hostContent = new List<string>();
+                    hostContent.Add(" Give these addresses to clients for manual connection:          ");
                     
                     // Sort IPs by priority (LAN first, then VPN, then others)
                     var sortedIPs = localIPs.OrderBy(ip => 
@@ -297,9 +353,10 @@ namespace TetrisMultiplayer
                             recommendation = "◇ Alternative";
                         }
                             
-                        Console.WriteLine($"║ {$"{ip}:{port}".PadRight(25)} │ {priority.PadRight(5)} │ {recommendation.PadRight(15)} ║");
+                        hostContent.Add($" {$"{ip}:{port}".PadRight(25)} │ {priority.PadRight(5)} │ {recommendation.PadRight(15)} ");
                     }
-                    Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
+                    
+                    DrawUIBox(startX, startY, boxWidth, "HOST CONNECTION INFORMATION", hostContent);
                 }
             }
             catch (Exception ex)
@@ -797,15 +854,24 @@ namespace TetrisMultiplayer
             var network = new NetworkManager();
             var cts = new CancellationTokenSource();
             
-            // Offer both options upfront for better user experience
-            Console.WriteLine("╔══════════════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║                       CONNECTION OPTIONS                        ║");
-            Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
-            Console.WriteLine("║ [1] Auto-discover hosts (scan local network)                    ║");
-            Console.WriteLine("║ [2] Manual IP connection (enter host address directly)          ║");
-            Console.WriteLine("║ [0] Exit                                                         ║");
-            Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
-            Console.WriteLine("\nFor VPN/complex networks, option [2] is recommended.");
+            // Offer both options upfront for better user experience - using proper UI drawing
+            Console.Clear();
+            int boxWidth = 66;
+            int startX = (Console.WindowWidth - boxWidth - 2) / 2; // Center horizontally
+            int startY = 3;
+            
+            var connectionOptions = new List<string>
+            {
+                " [1] Auto-discover hosts (scan local network)                    ",
+                " [2] Manual IP connection (enter host address directly)          ",
+                " [0] Exit                                                         "
+            };
+            
+            DrawUIBox(startX, startY, boxWidth, "CONNECTION OPTIONS", connectionOptions);
+            
+            Console.SetCursorPosition(startX, startY + connectionOptions.Count + 5);
+            Console.Write("For VPN/complex networks, option [2] is recommended.");
+            Console.SetCursorPosition(startX, startY + connectionOptions.Count + 6);
             Console.Write("Selection: ");
             
             string? choiceInput = Console.ReadLine();
@@ -845,14 +911,24 @@ namespace TetrisMultiplayer
                 
                 if (lobbies.Count > 0)
                 {
+                    Console.Clear();
+                    Console.SetCursorPosition(0, 0);
                     Console.WriteLine($"\n{lobbies.Count} host(s) found:");
-                    Console.WriteLine("╔════════════════════════════════════════════════════════════════╗");
+                    
+                    int boxWidth = 64;
+                    int startX = 2;
+                    int startY = 2;
+                    
+                    var lobbyContent = new List<string>();
                     for (int i = 0; i < lobbies.Count; i++)
                     {
                         var lobby = lobbies[i];
-                        Console.WriteLine($"║ [{i + 1}] {lobby.HostName.PadRight(20)} │ {lobby.IpAddress.PadRight(15)} │ {lobby.PlayerCount}/{lobby.MaxPlayers} players ║");
+                        lobbyContent.Add($" [{i + 1}] {lobby.HostName.PadRight(20)} │ {lobby.IpAddress.PadRight(15)} │ {lobby.PlayerCount}/{lobby.MaxPlayers} players ");
                     }
-                    Console.WriteLine("╚════════════════════════════════════════════════════════════════╝");
+                    
+                    DrawUIBox(startX, startY, boxWidth, "", lobbyContent);
+                    
+                    Console.SetCursorPosition(0, startY + lobbyContent.Count + 2);
                     Console.WriteLine($"[{lobbies.Count + 1}] Manual IP entry instead");
                     Console.WriteLine("[0] Exit");
                     Console.Write("\nSelection: ");
@@ -881,6 +957,8 @@ namespace TetrisMultiplayer
                 }
                 else
                 {
+                    Console.Clear();
+                    Console.SetCursorPosition(0, 0);
                     Console.WriteLine("\n❌ No hosts found automatically.");
                     Console.WriteLine("\nPossible reasons:");
                     Console.WriteLine("• No hosts currently running in the network");
@@ -888,10 +966,19 @@ namespace TetrisMultiplayer
                     Console.WriteLine("• Firewall blocks discovery traffic");
                     Console.WriteLine("• Host and client on different network segments");
                     
-                    Console.WriteLine("\n╔══════════════════════════════════════════════════════════════════╗");
-                    Console.WriteLine("║ Would you like to try manual IP connection instead?             ║");
-                    Console.WriteLine("║ [y] Yes, enter IP manually    [n] No, exit                      ║");
-                    Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
+                    int boxWidth = 66;
+                    int startX = 2;
+                    int startY = 8;
+                    
+                    var promptContent = new List<string>
+                    {
+                        " Would you like to try manual IP connection instead?             ",
+                        " [y] Yes, enter IP manually    [n] No, exit                      "
+                    };
+                    
+                    DrawUIBox(startX, startY, boxWidth, "", promptContent);
+                    
+                    Console.SetCursorPosition(startX, startY + promptContent.Count + 2);
                     Console.Write("Choice: ");
                     
                     var response = Console.ReadLine()?.ToLower();
@@ -917,10 +1004,20 @@ namespace TetrisMultiplayer
 
         static async Task ManualIPConnection(NetworkManager network, string playerName, CancellationToken cancellationToken)
         {
-            Console.WriteLine("\n╔══════════════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║                      MANUAL IP CONNECTION                       ║");
-            Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
-            Console.WriteLine();
+            Console.Clear();
+            
+            int boxWidth = 66;
+            int startX = (Console.WindowWidth - boxWidth - 2) / 2;
+            int startY = 2;
+            
+            var headerContent = new List<string>
+            {
+                "                      MANUAL IP CONNECTION                       "
+            };
+            
+            DrawUIBox(startX, startY, boxWidth, "", headerContent);
+            
+            Console.SetCursorPosition(0, startY + 4);
             Console.WriteLine("Examples of IP addresses to try:");
             Console.WriteLine("• Local network: 192.168.1.100, 10.0.0.50");
             Console.WriteLine("• VPN addresses: 100.76.82.47, 25.33.62.176");
