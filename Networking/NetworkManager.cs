@@ -30,6 +30,12 @@ namespace TetrisMultiplayer.Networking
     private CancellationTokenSource? _clientReceiveCts;
     private Task? _clientReceiveTask;
 
+        // Lobby-Discovery-System
+        private UdpClient? _discoveryServer;
+        private Task? _discoveryTask;
+        private string? _hostName;
+        private const int DISCOVERY_PORT = 5001;
+
         // Helper method for debug logging that won't interfere with UI
         private static void LogDebugToFile(string message)
         {
@@ -50,7 +56,14 @@ namespace TetrisMultiplayer.Networking
             _listener.Start();
             Console.WriteLine($"Host lauscht auf Port {port}...");
             _ = AcceptClientsAsync(_listener, cancellationToken); // Fire-and-forget, nicht awaiten!
-            await Task.CompletedTask; // sofort zur�ckkehren, damit Lobby angezeigt wird
+            await Task.CompletedTask; // sofort zurückkehren, damit Lobby angezeigt wird
+        }
+
+        // Host: Startet Host mit Lobby-Broadcasting
+        public async Task StartHostWithDiscovery(int port, string hostName, CancellationToken cancellationToken = default)
+        {
+            await StartHost(port, cancellationToken);
+            await StartLobbyBroadcast(hostName, port, cancellationToken);
         }
 
         private async Task AcceptClientsAsync(TcpListener listener, CancellationToken cancellationToken)
@@ -935,6 +948,278 @@ namespace TetrisMultiplayer.Networking
         {
             public string PlayerId { get; set; } = "";
             public int Round { get; set; }
+        }
+
+        // Lobby-Discovery-Datenstrukturen
+        public class LobbyInfo
+        {
+            public string HostName { get; set; } = "";
+            public string IpAddress { get; set; } = "";
+            public int Port { get; set; }
+            public int PlayerCount { get; set; }
+            public int MaxPlayers { get; set; } = 8;
+            public DateTime LastSeen { get; set; }
+        }
+
+        // Host: Startet Lobby-Broadcasting für Discovery
+        public async Task StartLobbyBroadcast(string hostName, int gamePort, CancellationToken cancellationToken = default)
+        {
+            _hostName = hostName;
+            try
+            {
+                _discoveryServer = new UdpClient(DISCOVERY_PORT);
+                _discoveryServer.EnableBroadcast = true;
+                _discoveryTask = Task.Run(() => LobbyBroadcastLoop(gamePort, cancellationToken), cancellationToken);
+                LogDebugToFile($"Lobby-Broadcasting gestartet für Host '{hostName}' auf Port {DISCOVERY_PORT}");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Fehler beim Starten des Lobby-Broadcasts: {ex.Message}");
+            }
+        }
+
+        // Host: Broadcast-Loop für Lobby-Discovery
+        private async Task LobbyBroadcastLoop(int gamePort, CancellationToken cancellationToken)
+        {
+            var broadcastEndpoint = new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT);
+            
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // Lobby-Information erstellen
+                    var lobbyInfo = new
+                    {
+                        type = "LobbyBroadcast",
+                        hostName = _hostName ?? "Unbekannter Host",
+                        port = gamePort,
+                        playerCount = ConnectedPlayerIds.Count + 1, // +1 für Host
+                        maxPlayers = 8,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    };
+
+                    var json = JsonSerializer.Serialize(lobbyInfo);
+                    var data = Encoding.UTF8.GetBytes(json);
+                    
+                    await _discoveryServer!.SendAsync(data, data.Length, broadcastEndpoint);
+                    
+                    // Warte auf Discovery-Requests
+                    if (_discoveryServer.Available > 0)
+                    {
+                        var result = await _discoveryServer.ReceiveAsync();
+                        await HandleDiscoveryRequest(result, gamePort);
+                    }
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    LogDebugToFile($"Fehler im Lobby-Broadcast-Loop: {ex.Message}");
+                }
+                
+                await Task.Delay(3000, cancellationToken); // Broadcast alle 3 Sekunden
+            }
+        }
+
+        // Host: Behandle Discovery-Requests von Clients
+        private async Task HandleDiscoveryRequest(UdpReceiveResult result, int gamePort)
+        {
+            try
+            {
+                var json = Encoding.UTF8.GetString(result.Buffer);
+                var request = JsonSerializer.Deserialize<JsonElement>(json);
+                
+                if (request.TryGetProperty("type", out var typeProp) && 
+                    typeProp.GetString() == "DiscoveryRequest")
+                {
+                    // Antwort mit Lobby-Informationen senden
+                    var response = new
+                    {
+                        type = "DiscoveryResponse",
+                        hostName = _hostName ?? "Unbekannter Host",
+                        ipAddress = GetLocalIPAddress(),
+                        port = gamePort,
+                        playerCount = ConnectedPlayerIds.Count + 1,
+                        maxPlayers = 8,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                    };
+
+                    var responseJson = JsonSerializer.Serialize(response);
+                    var responseData = Encoding.UTF8.GetBytes(responseJson);
+                    
+                    await _discoveryServer!.SendAsync(responseData, responseData.Length, result.RemoteEndPoint);
+                    LogDebugToFile($"Discovery-Response gesendet an {result.RemoteEndPoint}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Fehler beim Behandeln von Discovery-Request: {ex.Message}");
+            }
+        }
+
+        // Client: Suche nach verfügbaren Lobbys im lokalen Netzwerk
+        public async Task<List<LobbyInfo>> DiscoverLobbies(int timeoutMs = 5000, CancellationToken cancellationToken = default)
+        {
+            var lobbies = new List<LobbyInfo>();
+            
+            try
+            {
+                using var client = new UdpClient();
+                client.EnableBroadcast = true;
+                client.Client.ReceiveTimeout = timeoutMs;
+                
+                // Discovery-Request senden
+                var request = new
+                {
+                    type = "DiscoveryRequest",
+                    timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+                };
+                
+                var requestJson = JsonSerializer.Serialize(request);
+                var requestData = Encoding.UTF8.GetBytes(requestJson);
+                var broadcastEndpoint = new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT);
+                
+                await client.SendAsync(requestData, requestData.Length, broadcastEndpoint);
+                LogDebugToFile("Discovery-Request gesendet");
+                
+                // Auf Antworten warten
+                var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                var seenHosts = new HashSet<string>();
+                
+                while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var result = await client.ReceiveAsync();
+                        var json = Encoding.UTF8.GetString(result.Buffer);
+                        var response = JsonSerializer.Deserialize<JsonElement>(json);
+                        
+                        if (response.TryGetProperty("type", out var typeProp) && 
+                            typeProp.GetString() == "DiscoveryResponse")
+                        {
+                            var lobby = ParseLobbyResponse(response, result.RemoteEndPoint.Address.ToString());
+                            if (lobby != null)
+                            {
+                                var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
+                                if (!seenHosts.Contains(hostKey))
+                                {
+                                    lobbies.Add(lobby);
+                                    seenHosts.Add(hostKey);
+                                    LogDebugToFile($"Lobby gefunden: {lobby.HostName} ({lobby.IpAddress}:{lobby.Port})");
+                                }
+                            }
+                        }
+                        else if (response.TryGetProperty("type", out var broadcastType) && 
+                                broadcastType.GetString() == "LobbyBroadcast")
+                        {
+                            var lobby = ParseLobbyBroadcast(response, result.RemoteEndPoint.Address.ToString());
+                            if (lobby != null)
+                            {
+                                var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
+                                if (!seenHosts.Contains(hostKey))
+                                {
+                                    lobbies.Add(lobby);
+                                    seenHosts.Add(hostKey);
+                                    LogDebugToFile($"Lobby via Broadcast gefunden: {lobby.HostName} ({lobby.IpAddress}:{lobby.Port})");
+                                }
+                            }
+                        }
+                    }
+                    catch (SocketException) when (DateTime.UtcNow >= endTime)
+                    {
+                        break; // Timeout erreicht
+                    }
+                    catch (Exception ex)
+                    {
+                        LogDebugToFile($"Fehler beim Empfangen von Discovery-Response: {ex.Message}");
+                    }
+                }
+                
+                LogDebugToFile($"Discovery abgeschlossen. {lobbies.Count} Lobby(s) gefunden.");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Fehler bei Lobby-Discovery: {ex.Message}");
+            }
+            
+            return lobbies;
+        }
+
+        // Hilfsmethode: Parse Discovery-Response
+        private LobbyInfo? ParseLobbyResponse(JsonElement response, string senderIp)
+        {
+            try
+            {
+                return new LobbyInfo
+                {
+                    HostName = response.GetProperty("hostName").GetString() ?? "Unbekannt",
+                    IpAddress = response.TryGetProperty("ipAddress", out var ipProp) 
+                        ? ipProp.GetString() ?? senderIp 
+                        : senderIp,
+                    Port = response.GetProperty("port").GetInt32(),
+                    PlayerCount = response.GetProperty("playerCount").GetInt32(),
+                    MaxPlayers = response.TryGetProperty("maxPlayers", out var maxProp) && maxProp.TryGetInt32(out int max) ? max : 8,
+                    LastSeen = DateTime.UtcNow
+                };
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Fehler beim Parsen der Discovery-Response: {ex.Message}");
+                return null;
+            }
+        }
+
+        // Hilfsmethode: Parse Lobby-Broadcast
+        private LobbyInfo? ParseLobbyBroadcast(JsonElement broadcast, string senderIp)
+        {
+            try
+            {
+                return new LobbyInfo
+                {
+                    HostName = broadcast.GetProperty("hostName").GetString() ?? "Unbekannt",
+                    IpAddress = senderIp,
+                    Port = broadcast.GetProperty("port").GetInt32(),
+                    PlayerCount = broadcast.GetProperty("playerCount").GetInt32(),
+                    MaxPlayers = broadcast.TryGetProperty("maxPlayers", out var maxProp) && maxProp.TryGetInt32(out int max) ? max : 8,
+                    LastSeen = DateTime.UtcNow
+                };
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Fehler beim Parsen des Lobby-Broadcasts: {ex.Message}");
+                return null;
+            }
+        }
+
+        // Hilfsmethode: Lokale IP-Adresse ermitteln
+        private string GetLocalIPAddress()
+        {
+            try
+            {
+                var localIPs = Dns.GetHostAddresses(Dns.GetHostName())
+                    .Where(ip => ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                    .Select(ip => ip.ToString())
+                    .FirstOrDefault();
+                return localIPs ?? "127.0.0.1";
+            }
+            catch
+            {
+                return "127.0.0.1";
+            }
+        }
+
+        // Cleanup-Methoden für Discovery-Ressourcen
+        public void StopLobbyBroadcast()
+        {
+            try
+            {
+                _discoveryTask?.Wait(1000);
+                _discoveryServer?.Close();
+                _discoveryServer?.Dispose();
+                LogDebugToFile("Lobby-Broadcasting gestoppt");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Fehler beim Stoppen des Lobby-Broadcasts: {ex.Message}");
+            }
         }
     }
 }

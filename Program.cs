@@ -230,7 +230,7 @@ namespace TetrisMultiplayer
             var network = new NetworkManager();
             int port = 5000;
             var cts = new CancellationTokenSource();
-            await network.StartHost(port, cts.Token);
+            await network.StartHostWithDiscovery(port, playerName, cts.Token);
 
             // GameManager mit Seed erzeugen
             var gameManager = new TetrisMultiplayer.Game.GameManager();
@@ -244,6 +244,7 @@ namespace TetrisMultiplayer
             Console.WriteLine("Eigene IPv4-Adressen:");
             foreach (var ip in localIPs)
                 Console.WriteLine($"  {ip}:{port}");
+            Console.WriteLine("Lobby-Discovery aktiv - Clients können diesen Host automatisch finden.");
 
             // Host-Name speichern
             var playerNames = new Dictionary<string, string>();
@@ -690,6 +691,75 @@ namespace TetrisMultiplayer
 
         static async Task RunClientAsync(ILogger logger, string playerName)
         {
+            var network = new NetworkManager();
+            var cts = new CancellationTokenSource();
+            
+            Console.WriteLine("Suche nach verfügbaren Lobbys im lokalen Netzwerk...");
+            
+            try
+            {
+                var lobbies = await network.DiscoverLobbies(5000, cts.Token);
+                
+                if (lobbies.Count > 0)
+                {
+                    Console.WriteLine($"\n{lobbies.Count} Lobby(s) gefunden:");
+                    Console.WriteLine("╔════════════════════════════════════════════════════════════════╗");
+                    for (int i = 0; i < lobbies.Count; i++)
+                    {
+                        var lobby = lobbies[i];
+                        Console.WriteLine($"║ [{i + 1}] {lobby.HostName.PadRight(20)} │ {lobby.IpAddress.PadRight(15)} │ {lobby.PlayerCount}/{lobby.MaxPlayers} Spieler ║");
+                    }
+                    Console.WriteLine("╚════════════════════════════════════════════════════════════════╝");
+                    Console.WriteLine($"[{lobbies.Count + 1}] Manuelle IP-Eingabe");
+                    Console.WriteLine("[0] Beenden");
+                    Console.Write("\nAuswahl: ");
+                    
+                    if (int.TryParse(Console.ReadLine(), out int choice))
+                    {
+                        if (choice == 0)
+                        {
+                            return; // Beenden
+                        }
+                        else if (choice > 0 && choice <= lobbies.Count)
+                        {
+                            var selectedLobby = lobbies[choice - 1];
+                            await ConnectToLobby(network, selectedLobby.IpAddress, selectedLobby.Port, playerName, cts.Token);
+                            return;
+                        }
+                        else if (choice == lobbies.Count + 1)
+                        {
+                            // Fallback zu manueller Eingabe
+                            await ManualIPConnection(network, playerName, cts.Token);
+                            return;
+                        }
+                    }
+                    
+                    Console.WriteLine("Ungültige Auswahl.");
+                    return;
+                }
+                else
+                {
+                    Console.WriteLine("Keine Lobbys im lokalen Netzwerk gefunden.");
+                    Console.WriteLine("Möchten Sie eine IP-Adresse manuell eingeben? (j/n)");
+                    
+                    var response = Console.ReadLine()?.ToLower();
+                    if (response == "j" || response == "ja" || response == "y" || response == "yes")
+                    {
+                        await ManualIPConnection(network, playerName, cts.Token);
+                    }
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Fehler bei der Lobby-Suche: {ex.Message}");
+                Console.WriteLine("Fallback zu manueller IP-Eingabe...");
+                await ManualIPConnection(network, playerName, cts.Token);
+            }
+        }
+
+        static async Task ManualIPConnection(NetworkManager network, string playerName, CancellationToken cancellationToken)
+        {
             Console.WriteLine("Bitte Host-IP eingeben:");
             string? ip = Console.ReadLine();
             if (string.IsNullOrWhiteSpace(ip))
@@ -697,14 +767,25 @@ namespace TetrisMultiplayer
                 Console.WriteLine("Ungültige IP-Adresse.");
                 return;
             }
+            
             int port = 5000;
-            var network = new NetworkManager();
-            var cts = new CancellationTokenSource();
-            Console.WriteLine($"Verbinde zu {ip}:{port} ...");
-            await network.ConnectToHost(ip, port, playerName, cts.Token);
-            Console.WriteLine("Verbunden. Warte auf Lobby...");
-            // Lobby-Status anzeigen
-            await ClientLobbyLoop(network, cts.Token, playerName);
+            await ConnectToLobby(network, ip, port, playerName, cancellationToken);
+        }
+
+        static async Task ConnectToLobby(NetworkManager network, string ip, int port, string playerName, CancellationToken cancellationToken)
+        {
+            try
+            {
+                Console.WriteLine($"Verbinde zu {ip}:{port} ...");
+                await network.ConnectToHost(ip, port, playerName, cancellationToken);
+                Console.WriteLine("Verbunden. Warte auf Lobby...");
+                // Lobby-Status anzeigen
+                await ClientLobbyLoop(network, cancellationToken, playerName);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Verbindung fehlgeschlagen: {ex.Message}");
+            }
         }
 
         static async Task ClientLobbyLoop(NetworkManager network, CancellationToken cancellationToken, string playerName)
