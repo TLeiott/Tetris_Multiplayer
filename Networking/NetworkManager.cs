@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -13,7 +14,7 @@ using System.Text.Json.Serialization;
 
 namespace TetrisMultiplayer.Networking
 {
-    public class NetworkManager
+    public class NetworkManager : IDisposable
     {
         private TcpListener? _listener;
         private readonly List<TcpClient> _clients = new();
@@ -29,6 +30,12 @@ namespace TetrisMultiplayer.Networking
     // Single client receiver state to prevent concurrent stream reads
     private CancellationTokenSource? _clientReceiveCts;
     private Task? _clientReceiveTask;
+
+        // Lobby-Discovery-System
+        private UdpClient? _discoveryServer;
+        private Task? _discoveryTask;
+        private string? _hostName;
+        private const int DISCOVERY_PORT = 5001;
 
         // Helper method for debug logging that won't interfere with UI
         private static void LogDebugToFile(string message)
@@ -46,11 +53,37 @@ namespace TetrisMultiplayer.Networking
 
         public async Task StartHost(int port, CancellationToken cancellationToken = default)
         {
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
-            Console.WriteLine($"Host lauscht auf Port {port}...");
-            _ = AcceptClientsAsync(_listener, cancellationToken); // Fire-and-forget, nicht awaiten!
-            await Task.CompletedTask; // sofort zur�ckkehren, damit Lobby angezeigt wird
+            try
+            {
+                _listener = new TcpListener(IPAddress.Any, port);
+                // Enable socket reuse to prevent "Address already in use" errors
+                _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _listener.Start();
+                Console.WriteLine($"Host lauscht auf Port {port}...");
+                LogDebugToFile($"TCP Listener successfully started on port {port}");
+                _ = AcceptClientsAsync(_listener, cancellationToken); // Fire-and-forget, nicht awaiten!
+                await Task.CompletedTask; // sofort zurückkehren, damit Lobby angezeigt wird
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+            {
+                var errorMsg = $"Port {port} is already in use. Please close any existing host instances or wait a moment for cleanup.";
+                LogDebugToFile($"Socket binding error: {errorMsg}");
+                Console.WriteLine($"Error: {errorMsg}");
+                throw new InvalidOperationException(errorMsg, ex);
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error starting host on port {port}: {ex.Message}");
+                Console.WriteLine($"Error starting host: {ex.Message}");
+                throw;
+            }
+        }
+
+        // Host: Startet Host mit Lobby-Broadcasting
+        public async Task StartHostWithDiscovery(int port, string hostName, CancellationToken cancellationToken = default)
+        {
+            await StartHost(port, cancellationToken);
+            await StartLobbyBroadcast(hostName, port, cancellationToken);
         }
 
         private async Task AcceptClientsAsync(TcpListener listener, CancellationToken cancellationToken)
@@ -935,6 +968,524 @@ namespace TetrisMultiplayer.Networking
         {
             public string PlayerId { get; set; } = "";
             public int Round { get; set; }
+        }
+
+        // Lobby-Discovery-Datenstrukturen
+        public class LobbyInfo
+        {
+            public string HostName { get; set; } = "";
+            public string IpAddress { get; set; } = "";
+            public int Port { get; set; }
+            public int PlayerCount { get; set; }
+            public int MaxPlayers { get; set; } = 8;
+            public DateTime LastSeen { get; set; }
+        }
+
+        // Host: Truly simplified and robust lobby broadcasting - pure broadcast only
+        public async Task StartLobbyBroadcast(string hostName, int gamePort, CancellationToken cancellationToken = default)
+        {
+            _hostName = hostName;
+            try
+            {
+                // Simple UDP broadcaster - no listening, no port binding conflicts
+                _discoveryServer = new UdpClient();
+                _discoveryServer.EnableBroadcast = true;
+                // Let system choose port to avoid conflicts
+                
+                _discoveryTask = Task.Run(() => PureBroadcastLoop(gamePort, cancellationToken), cancellationToken);
+                LogDebugToFile($"Pure broadcast lobby discovery started for host '{hostName}'");
+                Console.WriteLine("Lobby discovery active - clients can find this host automatically.");
+                
+                // Show available IPs for user reference (but don't fail if this fails)
+                try
+                {
+                    var localIPs = GetLocalIPAddresses();
+                    LogDebugToFile($"Host available on: {string.Join(", ", localIPs)}");
+                }
+                catch (Exception ipEx)
+                {
+                    LogDebugToFile($"Could not enumerate IPs (non-critical): {ipEx.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error starting lobby broadcast: {ex.Message}");
+                Console.WriteLine("Warning: Auto-discovery may not work, but manual IP entry is still available.");
+                // Don't throw - let the host start anyway for better plug-and-play experience
+                LogDebugToFile("Host will continue without auto-discovery (manual IP entry still works)");
+            }
+        }
+
+        // Pure broadcast loop - no request handling to avoid port conflicts
+        private async Task PureBroadcastLoop(int gamePort, CancellationToken cancellationToken)
+        {
+            Console.WriteLine("Starting lobby broadcasts...");
+            
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    // Create lobby info - includes all necessary data for clients
+                    var lobbyInfo = new
+                    {
+                        type = "LobbyBroadcast",
+                        hostName = _hostName ?? "Unknown Host",
+                        port = gamePort,
+                        playerCount = ConnectedPlayerIds.Count + 1, // +1 for host
+                        maxPlayers = 8,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        hostIP = GetBestLocalIP() // Include best IP for direct connection
+                    };
+
+                    var json = JsonSerializer.Serialize(lobbyInfo);
+                    var data = Encoding.UTF8.GetBytes(json);
+                    
+                    // Send to multiple broadcast addresses for maximum compatibility
+                    var broadcastTargets = new List<IPEndPoint>
+                    {
+                        new IPEndPoint(IPAddress.Broadcast, DISCOVERY_PORT), // Standard broadcast
+                    };
+                    
+                    // Add LAN-specific broadcasts
+                    try
+                    {
+                        var localIPs = GetLocalIPAddresses();
+                        foreach (var ip in localIPs)
+                        {
+                            var bytes = ip.GetAddressBytes();
+                            if (bytes[0] == 192 && bytes[1] == 168)
+                            {
+                                // 192.168.x.255 broadcast
+                                var broadcast = new IPAddress(new byte[] { 192, 168, bytes[2], 255 });
+                                broadcastTargets.Add(new IPEndPoint(broadcast, DISCOVERY_PORT));
+                            }
+                            else if (bytes[0] == 10)
+                            {
+                                // 10.x.x.255 broadcast
+                                var broadcast = new IPAddress(new byte[] { 10, bytes[1], bytes[2], 255 });
+                                broadcastTargets.Add(new IPEndPoint(broadcast, DISCOVERY_PORT));
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogDebugToFile($"Error getting specific broadcast addresses: {ex.Message}");
+                    }
+                    
+                    // Broadcast to all targets
+                    int successCount = 0;
+                    foreach (var endpoint in broadcastTargets)
+                    {
+                        try
+                        {
+                            await _discoveryServer!.SendAsync(data, data.Length, endpoint);
+                            successCount++;
+                            LogDebugToFile($"Broadcast sent to {endpoint}");
+                        }
+                        catch (Exception ex)
+                        {
+                            LogDebugToFile($"Broadcast to {endpoint} failed: {ex.Message}");
+                        }
+                    }
+                    
+                    if (successCount == 0)
+                    {
+                        LogDebugToFile("Warning: No broadcasts succeeded");
+                    }
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    LogDebugToFile($"Error in broadcast loop: {ex.Message}");
+                }
+                
+                await Task.Delay(1500, cancellationToken); // Broadcast every 1.5 seconds for better responsiveness
+            }
+            
+            Console.WriteLine("Lobby broadcasts stopped.");
+        }
+
+        // Pure listening-based discovery - no conflicts, truly plug-and-play
+        public async Task<List<LobbyInfo>> DiscoverLobbies(int timeoutMs = 8000, CancellationToken cancellationToken = default)
+        {
+            var lobbies = new List<LobbyInfo>();
+            var seenHosts = new HashSet<string>();
+            
+            LogDebugToFile("Starting pure listening lobby discovery");
+            Console.WriteLine("Listening for host broadcasts...");
+            
+            UdpClient? client = null;
+            try
+            {
+                // Fix: Use dynamic port allocation to avoid conflicts between multiple clients
+                try
+                {
+                    // Try to bind to the discovery port first
+                    client = new UdpClient(DISCOVERY_PORT);
+                    client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                    Console.WriteLine($"Listening on UDP port {DISCOVERY_PORT} for lobby broadcasts...");
+                    LogDebugToFile($"Successfully bound to discovery port {DISCOVERY_PORT}");
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+                {
+                    LogDebugToFile($"Port {DISCOVERY_PORT} is busy, trying alternative discovery method...");
+                    Console.WriteLine($"Port {DISCOVERY_PORT} is busy (another client running). Using alternative discovery...");
+                    
+                    // Alternative: Use any available port and try to receive broadcasts
+                    try
+                    {
+                        client = new UdpClient(0); // Let system choose port
+                        var localEndpoint = (IPEndPoint)client.Client.LocalEndPoint!;
+                        Console.WriteLine($"Using port {localEndpoint.Port} for discovery...");
+                        LogDebugToFile($"Using alternative port {localEndpoint.Port} for discovery");
+                        
+                        // Bind to any address to receive broadcasts
+                        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, true);
+                    }
+                    catch (Exception altEx)
+                    {
+                        LogDebugToFile($"Alternative discovery method also failed: {altEx.Message}");
+                        Console.WriteLine("Discovery unavailable. Please use manual IP connection.");
+                        return lobbies;
+                    }
+                }
+                catch (SocketException ex)
+                {
+                    LogDebugToFile($"Failed to bind for discovery: {ex.Message}");
+                    Console.WriteLine($"Discovery error: Could not set up UDP listener. {ex.Message}");
+                    Console.WriteLine("Please use manual IP connection instead.");
+                    return lobbies; // Return empty list instead of crashing
+                }
+                
+                // Set reasonable timeout for individual receive operations
+                client.Client.ReceiveTimeout = 1000; // 1 second timeout per receive
+                
+                LogDebugToFile("Listening for lobby broadcasts...");
+                
+                // Listen for broadcasts from hosts
+                var endTime = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                int receivedCount = 0;
+                var lastProgressTime = DateTime.UtcNow;
+                
+                while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        // Show progress every 2 seconds
+                        var now = DateTime.UtcNow;
+                        var remainingTime = endTime - now;
+                        if ((now - lastProgressTime).TotalSeconds >= 2)
+                        {
+                            Console.WriteLine($"Searching... ({(int)remainingTime.TotalSeconds}s remaining)");
+                            lastProgressTime = now;
+                        }
+                        
+                        var result = await client.ReceiveAsync();
+                        receivedCount++;
+                        
+                        var json = Encoding.UTF8.GetString(result.Buffer);
+                        LogDebugToFile($"Received broadcast from {result.RemoteEndPoint}: {json}");
+                        Console.WriteLine($"Received broadcast from {result.RemoteEndPoint.Address}");
+                        
+                        var response = JsonSerializer.Deserialize<JsonElement>(json);
+                        
+                        if (response.TryGetProperty("type", out var typeProp))
+                        {
+                            var msgType = typeProp.GetString();
+                            if (msgType == "LobbyBroadcast")
+                            {
+                                var lobby = ParseLobbyInfo(response, result.RemoteEndPoint.Address.ToString());
+                                if (lobby != null)
+                                {
+                                    var hostKey = $"{lobby.IpAddress}:{lobby.Port}";
+                                    if (!seenHosts.Contains(hostKey))
+                                    {
+                                        lobbies.Add(lobby);
+                                        seenHosts.Add(hostKey);
+                                        Console.WriteLine($"Found lobby: {lobby.HostName} at {lobby.IpAddress}:{lobby.Port}");
+                                        LogDebugToFile($"Found lobby: {lobby.HostName} at {lobby.IpAddress}:{lobby.Port}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+                    {
+                        // Timeout is expected - continue listening
+                        LogDebugToFile("Listening timeout - continuing...");
+                        continue;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Expected when cancelling
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogDebugToFile($"Error receiving discovery broadcast: {ex.Message}");
+                        Console.WriteLine($"Discovery error: {ex.Message}");
+                    }
+                }
+                
+                Console.WriteLine($"Discovery completed. Received {receivedCount} broadcasts, found {lobbies.Count} unique lobbies");
+                LogDebugToFile($"Discovery completed. Received {receivedCount} broadcasts, found {lobbies.Count} unique lobbies");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error in lobby discovery: {ex.Message}");
+                Console.WriteLine($"Discovery failed: {ex.Message}");
+            }
+            finally
+            {
+                try
+                {
+                    client?.Close();
+                    client?.Dispose();
+                }
+                catch { }
+            }
+            
+            return lobbies;
+        }
+
+        // Simplified lobby info parsing
+        private LobbyInfo? ParseLobbyInfo(JsonElement message, string senderIp)
+        {
+            try
+            {
+                var hostName = "Unknown Host";
+                if (message.TryGetProperty("hostName", out var hostProp))
+                    hostName = hostProp.GetString() ?? "Unknown Host";
+                
+                var port = 5000; // Default port
+                if (message.TryGetProperty("port", out var portProp))
+                    port = portProp.GetInt32();
+                
+                var playerCount = 1;
+                if (message.TryGetProperty("playerCount", out var playerProp))
+                    playerCount = playerProp.GetInt32();
+                
+                var maxPlayers = 8;
+                if (message.TryGetProperty("maxPlayers", out var maxProp))
+                    maxPlayers = maxProp.GetInt32();
+                
+                // Use explicit IP if provided, otherwise sender IP
+                var ipAddress = senderIp;
+                if (message.TryGetProperty("ipAddress", out var ipProp))
+                {
+                    var explicitIP = ipProp.GetString();
+                    if (!string.IsNullOrEmpty(explicitIP))
+                        ipAddress = explicitIP;
+                }
+                else if (message.TryGetProperty("hostIP", out var hostIPProp))
+                {
+                    var hostIP = hostIPProp.GetString();
+                    if (!string.IsNullOrEmpty(hostIP))
+                        ipAddress = hostIP;
+                }
+                
+                return new LobbyInfo
+                {
+                    HostName = hostName,
+                    IpAddress = ipAddress,
+                    Port = port,
+                    PlayerCount = playerCount,
+                    MaxPlayers = maxPlayers,
+                    LastSeen = DateTime.UtcNow
+                };
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error parsing lobby info: {ex.Message}");
+                return null;
+            }
+        }
+
+        // Get simple local IP addresses without complex interface enumeration
+        private List<IPAddress> GetLocalIPAddresses()
+        {
+            var addresses = new List<IPAddress>();
+            try
+            {
+                // Use simple DNS-based method that's more reliable
+                var hostAddresses = Dns.GetHostAddresses(Dns.GetHostName())
+                    .Where(ip => ip.AddressFamily == AddressFamily.InterNetwork && 
+                                !IPAddress.IsLoopback(ip))
+                    .ToList();
+                
+                addresses.AddRange(hostAddresses);
+                
+                if (addresses.Count == 0)
+                {
+                    // Fallback: try to get at least one usable address
+                    addresses.Add(IPAddress.Parse("127.0.0.1"));
+                }
+                
+                LogDebugToFile($"Found local IP addresses: {string.Join(", ", addresses)}");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error getting local IP addresses: {ex.Message}");
+                // Fallback to localhost
+                addresses.Add(IPAddress.Parse("127.0.0.1"));
+            }
+            
+            return addresses;
+        }
+
+        // Get the best local IP address for hosting with VPN support
+        private string GetBestLocalIP()
+        {
+            try
+            {
+                var addresses = GetLocalIPAddresses();
+                
+                // First priority: LAN addresses (most reliable for local network)
+                var lanIP = addresses.FirstOrDefault(ip => 
+                {
+                    var bytes = ip.GetAddressBytes();
+                    return (bytes[0] == 192 && bytes[1] == 168) || // 192.168.x.x
+                           (bytes[0] == 10) || // 10.x.x.x
+                           (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31); // 172.16-31.x.x
+                });
+                
+                if (lanIP != null)
+                {
+                    LogDebugToFile($"Selected LAN IP: {lanIP}");
+                    return lanIP.ToString();
+                }
+                
+                // Second priority: VPN addresses if no LAN found
+                var vpnIP = addresses.FirstOrDefault(ip => 
+                {
+                    var bytes = ip.GetAddressBytes();
+                    return bytes[0] == 100 || // Tailscale/Zerotier
+                           bytes[0] == 25;    // Hamachi
+                });
+                
+                if (vpnIP != null)
+                {
+                    LogDebugToFile($"Selected VPN IP: {vpnIP}");
+                    return vpnIP.ToString();
+                }
+                
+                // Fallback to first available non-loopback address
+                var fallbackIP = addresses.FirstOrDefault()?.ToString() ?? "127.0.0.1";
+                LogDebugToFile($"Using fallback IP: {fallbackIP}");
+                return fallbackIP;
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error getting best local IP: {ex.Message}");
+                return "127.0.0.1";
+            }
+        }
+
+        // Simplified cleanup method
+        public void StopLobbyBroadcast()
+        {
+            try
+            {
+                _discoveryTask?.Wait(1000);
+                _discoveryServer?.Close();
+                _discoveryServer?.Dispose();
+                LogDebugToFile("Lobby broadcasting stopped");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error stopping lobby broadcast: {ex.Message}");
+            }
+        }
+
+
+
+
+
+        // Optional simple network diagnostics (doesn't break startup if it fails)
+        public async Task<string> GetSimpleNetworkInfo()
+        {
+            var info = new StringBuilder();
+            info.AppendLine("=== Network Information ===");
+            
+            try
+            {
+                var localIPs = GetLocalIPAddresses();
+                info.AppendLine($"Available IP addresses ({localIPs.Count}):");
+                foreach (var ip in localIPs)
+                {
+                    var type = "";
+                    var bytes = ip.GetAddressBytes();
+                    if (bytes[0] == 192 && bytes[1] == 168)
+                        type = " (LAN)";
+                    else if (bytes[0] == 10)
+                        type = " (VPN/Corporate)";
+                    else if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                        type = " (Private)";
+                    else if (bytes[0] == 100 || bytes[0] == 25)
+                        type = " (VPN)";
+                    
+                    info.AppendLine($"  - {ip}{type}");
+                }
+                
+                info.AppendLine($"\nDiscovery port: {DISCOVERY_PORT} (UDP)");
+                info.AppendLine("Game port: 5000 (TCP)");
+            }
+            catch (Exception ex)
+            {
+                info.AppendLine($"Error getting network info: {ex.Message}");
+            }
+            
+            info.AppendLine("=== End Network Information ===");
+            var result = info.ToString();
+            LogDebugToFile(result);
+            return result;
+        }
+
+        // Cleanup method to properly dispose of network resources
+        public void Dispose()
+        {
+            try
+            {
+                LogDebugToFile("Starting NetworkManager cleanup...");
+                
+                // Stop client receive loop
+                _clientReceiveCts?.Cancel();
+                _clientReceiveTask?.Wait(1000);
+                _clientReceiveCts?.Dispose();
+                
+                // Close client connection
+                _clientStream?.Close();
+                _clientStream?.Dispose();
+                
+                // Close all client connections
+                foreach (var kvp in _playerClients)
+                {
+                    try
+                    {
+                        kvp.Value?.Close();
+                        kvp.Value?.Dispose();
+                    }
+                    catch { }
+                }
+                _playerClients.Clear();
+                
+                // Stop TCP listener
+                if (_listener != null)
+                {
+                    _listener.Stop();
+                    _listener = null;
+                    LogDebugToFile("TCP Listener stopped and disposed");
+                }
+                
+                // Stop lobby discovery
+                StopLobbyBroadcast();
+                
+                LogDebugToFile("NetworkManager cleanup completed");
+            }
+            catch (Exception ex)
+            {
+                LogDebugToFile($"Error during NetworkManager cleanup: {ex.Message}");
+            }
         }
     }
 }
