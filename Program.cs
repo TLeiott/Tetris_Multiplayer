@@ -513,9 +513,6 @@ namespace TetrisMultiplayer
             // Track which players have placed in the current round (host + clients)
             var playersWhoPlaced = new HashSet<string>();
             
-            // Send initial leaderboard to clients so they see all players from the start
-            await BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, cancellationToken);
-            
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
@@ -1517,7 +1514,7 @@ namespace TetrisMultiplayer
                                     lastGravity = DateTime.Now;
                                 }
 
-                                // Use real-time leaderboard if available, otherwise use local engine data
+                                // Use real-time leaderboard if available, otherwise show all known players with default values
                                 var displayLeaderboard = realtimeScores.Count > 0 
                                     ? realtimeScores.Keys.Select(id => 
                                     {
@@ -1526,7 +1523,8 @@ namespace TetrisMultiplayer
                                             score = Math.Max(score, engine.Score);
                                         return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                     }).ToList()
-                                    : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
+                                    : network.ConnectedPlayerIds.Concat(new[] { "host", playerId }).Distinct().Select(id => 
+                                        (id, id == playerId ? engine.Score : 0, 100, false)).ToList();
                                 
                                 TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, displayLeaderboard, playerId, $"Round {round} - Piece {pieceId}", realtimePlayerNames);
                                 
@@ -1614,7 +1612,8 @@ namespace TetrisMultiplayer
                                                 score = Math.Max(score, engine.Score);
                                             return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                         }).ToList()
-                                        : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
+                                        : network.ConnectedPlayerIds.Concat(new[] { "host", playerId }).Distinct().Select(id => 
+                                            (id, id == playerId ? engine.Score : 0, 100, false)).ToList();
                                     TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, placedLeaderboard, playerId, "PIECE PLACED - WAITING FOR OTHERS...", realtimePlayerNames, realtimePlayersPlaced);
                                 }
                                 
@@ -1638,7 +1637,8 @@ namespace TetrisMultiplayer
                                                     score = Math.Max(score, engine.Score);
                                                 return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                             }).ToList()
-                                            : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
+                                            : network.ConnectedPlayerIds.Concat(new[] { "host", playerId }).Distinct().Select(id => 
+                                                (id, id == playerId ? engine.Score : 0, 100, false)).ToList();
                                         TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, waitingLeaderboard, playerId, "WAITING FOR OTHERS...", realtimePlayerNames, realtimePlayersPlaced);
                                     }
 
