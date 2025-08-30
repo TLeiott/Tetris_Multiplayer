@@ -513,6 +513,9 @@ namespace TetrisMultiplayer
             // Track which players have placed in the current round (host + clients)
             var playersWhoPlaced = new HashSet<string>();
             
+            // Send initial leaderboard to clients so they see all players from the start
+            await BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, cancellationToken);
+            
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
