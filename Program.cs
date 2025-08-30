@@ -676,8 +676,8 @@ namespace TetrisMultiplayer
                         TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard2, hostId, "HOST PIECE PLACED - WAITING FOR CLIENTS...", playerNames, playersWhoPlaced);
                     }
 
-                    // Warte auf PlacedPiece von allen Clients oder Timeout - INCREASED timeout für bessere Synchronisation
-                    var placedPieces = await WaitForPlacedPieces(network, network.ConnectedPlayerIds.ToList(), 25000, logger, cancellationToken, hps, spectators, playersWhoPlaced);
+                    // Wait for all players to place pieces - immediate progression when all are ready
+                    var placedPieces = await WaitForPlacedPieces(network, network.ConnectedPlayerIds.ToList(), 10000, logger, cancellationToken, hps, spectators, playersWhoPlaced);
 
                     // Process client pieces using reported deltas (no host-side simulation)
                     foreach (var placedPiece in placedPieces)
@@ -743,27 +743,27 @@ namespace TetrisMultiplayer
                     await BroadcastRealtimeLeaderboard(network, scores, hps, spectators, playerNames, playersWhoPlaced, cancellationToken);
                     await BroadcastSpectatorSnapshots(network, fields, scores, hps, spectators, cancellationToken);
                     
-                    // SYNCHRONIZATION FIX: Ensure ALL players wait before next round starts
-                    logger.LogInformation($"[Host] Round {round} complete. Implementing round synchronization...");
+                    // RESPONSIVE SYNCHRONIZATION: Keep essential sync but make it immediate when all ready
+                    logger.LogInformation($"[Host] Round {round} complete. Implementing responsive round synchronization...");
                     
                     // Send a "WaitForNextRound" message to all players to ensure synchronization
                     var waitMsg = new { type = "WaitForNextRound", round = round, message = "Round complete - preparing next round..." };
                     await network.BroadcastAsync(waitMsg);
                     
-                    // NEUE SYNCHRONISATIONS-MECHANISMUS: Warte auf Bestätigung von allen aktiven Spielern
+                    // Keep RoundReadyRequest/Confirmation system but make it responsive
                     var confirmedPlayers = new HashSet<string>();
                     var syncStart = DateTime.UtcNow;
-                    var syncTimeoutMs = 10000; // 10 Sekunden für Round Ready Confirmations
+                    var syncTimeoutMs = 10000; // 10 seconds timeout for disconnect detection only
                     
-                    // Sende RoundReadyRequest an alle aktiven Clients
+                    // Send RoundReadyRequest to all active clients
                     await network.BroadcastRoundReadyRequest(round);
-                    logger.LogInformation($"[Host] Warte auf RoundReadyConfirmation von {activePlayers.Where(id => id != hostId && !spectators.Contains(id)).Count()} Clients...");
+                    logger.LogInformation($"[Host] Waiting for RoundReadyConfirmation from {activePlayers.Where(id => id != hostId && !spectators.Contains(id)).Count()} clients (immediate progression when ready)...");
                     
-                    // Host ist automatisch "ready"
+                    // Host is automatically "ready"
                     if (!spectators.Contains(hostId))
                         confirmedPlayers.Add(hostId);
                     
-                    // Warte auf alle Client-Bestätigungen
+                    // Wait for all client confirmations with immediate progression
                     var expectedClients = activePlayers.Where(id => id != hostId && !spectators.Contains(id)).ToList();
                     
                     while (confirmedPlayers.Count < activePlayers.Count && 
@@ -772,50 +772,58 @@ namespace TetrisMultiplayer
                     {
                         try
                         {
-                            var confirmation = await network.ReceiveRoundReadyConfirmationAsync(cancellationToken, 1000);
+                            var confirmation = await network.ReceiveRoundReadyConfirmationAsync(cancellationToken, 100); // Fast polling
                             if (confirmation != null && 
                                 confirmation.Round == round && 
                                 expectedClients.Contains(confirmation.PlayerId) &&
                                 !confirmedPlayers.Contains(confirmation.PlayerId))
                             {
                                 confirmedPlayers.Add(confirmation.PlayerId);
-                                logger.LogInformation($"[Host] RoundReadyConfirmation von {confirmation.PlayerId} erhalten ({confirmedPlayers.Count}/{activePlayers.Count})");
+                                logger.LogInformation($"[Host] RoundReadyConfirmation from {confirmation.PlayerId} received ({confirmedPlayers.Count}/{activePlayers.Count})");
+                                
+                                // IMMEDIATE PROGRESSION: If all players confirmed, proceed immediately
+                                if (confirmedPlayers.Count == activePlayers.Count)
+                                {
+                                    var syncElapsed = (DateTime.UtcNow - syncStart).TotalMilliseconds;
+                                    logger.LogInformation($"[Host] ✓ ALL players confirmed! Proceeding immediately after {syncElapsed:F0}ms");
+                                    break;
+                                }
                             }
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (!(ex is OperationCanceledException))
                         {
-                            logger.LogWarning($"[Host] Fehler beim Empfangen von RoundReadyConfirmation: {ex.Message}");
+                            logger.LogWarning($"[Host] Error receiving RoundReadyConfirmation: {ex.Message}");
                         }
                         
-                        await Task.Delay(50, cancellationToken);
+                        await Task.Delay(25, cancellationToken); // Fast polling for responsiveness
                     }
                     
-                    // Prüfe Synchronisations-Erfolg
+                    // Check synchronization success
                     var notConfirmedPlayers = expectedClients.Where(id => !confirmedPlayers.Contains(id)).ToList();
                     if (notConfirmedPlayers.Count > 0)
                     {
-                        logger.LogWarning($"[Host] {notConfirmedPlayers.Count} Spieler haben nicht bestätigt: {string.Join(", ", notConfirmedPlayers)}");
-                        logger.LogInformation("[Host] Fahre trotzdem fort, aber markiere als potentiell disconnected");
+                        logger.LogWarning($"[Host] {notConfirmedPlayers.Count} players did not confirm: {string.Join(", ", notConfirmedPlayers)}");
+                        logger.LogInformation("[Host] Continuing anyway, but marking as potentially disconnected");
                         
-                        // Markiere nicht-bestätigte Spieler als problematisch
+                        // Mark unconfirmed players as problematic
                         foreach (var id in notConfirmedPlayers)
                         {
-                            logger.LogWarning($"[Host] Spieler {id} reagiert nicht - könnte disconnected sein");
+                            logger.LogWarning($"[Host] Player {id} not responding - might be disconnected");
                         }
                     }
                     else
                     {
-                        logger.LogInformation($"[Host] ✓ Perfekte Synchronisation: Alle {activePlayers.Count} Spieler sind bereit für nächste Runde!");
+                        logger.LogInformation($"[Host] ✓ Perfect synchronization: All {activePlayers.Count} players ready for next round!");
                     }
                     
-                    // Extra Pause für bessere Synchronisation, besonders wenn nicht alle bestätigt haben
+                    // Brief pause for message delivery - much shorter than original
                     if (notConfirmedPlayers.Count > 0)
                     {
-                        await Task.Delay(3000, cancellationToken); // Längere Pause bei Problemen
+                        await Task.Delay(1000, cancellationToken); // Shorter pause for problematic players
                     }
                     else
                     {
-                        await Task.Delay(1000, cancellationToken); // Kurze Pause bei perfekter Sync
+                        await Task.Delay(500, cancellationToken); // Very brief pause for perfect sync
                     }
                     
                     logger.LogInformation($"[Host] Starting round {round + 1} with {activePlayers.Count} active players");
@@ -1860,19 +1868,16 @@ namespace TetrisMultiplayer
             
             logger.LogInformation($"[Host] Warte auf PlacedPiece von {activePlayers.Count} aktiven Spielern: {string.Join(", ", activePlayers)}");
             
-            // SYNCHRONIZATION FIX: Keine adaptive Timeout-Erweiterung mehr - feste Zeit für alle
-            var baseTimeout = Math.Max(timeoutMs, 15000); // Mindestens 15 Sekunden für echte Synchronisation
-            var phaseTimeout = baseTimeout / 3; // Teile in 3 Phasen auf
+            // IMMEDIATE PROGRESSION: Wait for ALL players with fast polling, proceed instantly when ready
+            var disconnectTimeout = start.AddMilliseconds(timeoutMs); // Keep original timeout for disconnect detection
+            logger.LogInformation($"[Host] Waiting for all players - immediate progression when ready, disconnect timeout: {timeoutMs/1000}s");
             
-            // Phase 1: Standardzeit warten (erste 1/3 der Zeit)
-            var phase1End = start.AddMilliseconds(phaseTimeout);
-            logger.LogInformation($"[Host] Phase 1: Warte {phaseTimeout/1000}s auf alle Spieler");
-            
-            while (DateTime.UtcNow < phase1End && received.Count < activePlayers.Count && !cancellationToken.IsCancellationRequested)
+            // Single fast polling loop - immediate progression when all players are ready
+            while (received.Count < activePlayers.Count && DateTime.UtcNow < disconnectTimeout && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    var msg = await network.ReceivePlacedPieceAsync(cancellationToken, 1000);
+                    var msg = await network.ReceivePlacedPieceAsync(cancellationToken, 100); // Fast polling for responsiveness
                     if (msg != null && !received.Contains(msg.PlayerId) && activePlayers.Contains(msg.PlayerId))
                     {
                         results.Add(msg);
@@ -1881,118 +1886,64 @@ namespace TetrisMultiplayer
                             playersWhoPlaced.Add(msg.PlayerId);
                         missedRounds[msg.PlayerId] = 0;
                         logger.LogInformation($"[Host] PlacedPiece von {msg.PlayerId} erhalten ({received.Count}/{activePlayers.Count})");
+                        
+                        // IMMEDIATE PROGRESSION: If all players have placed, proceed immediately
+                        if (received.Count == activePlayers.Count)
+                        {
+                            var elapsedMs = (DateTime.UtcNow - start).TotalMilliseconds;
+                            logger.LogInformation($"[Host] ✓ ALL {activePlayers.Count} players ready! Proceeding immediately after {elapsedMs:F0}ms");
+                            break;
+                        }
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
                     logger.LogWarning($"[Host] Fehler beim Empfangen von PlacedPiece: {ex.Message}");
                 }
                 
+                // Very short delay for CPU efficiency while maintaining responsiveness
                 await Task.Delay(10, cancellationToken);
             }
             
-            // Phase 2: Wenn noch nicht alle da sind, nochmals 1/3 der Zeit warten
-            if (received.Count < activePlayers.Count)
-            {
-                var missingInPhase1 = activePlayers.Where(id => !received.Contains(id)).ToList();
-                logger.LogInformation($"[Host] Phase 2: Noch {missingInPhase1.Count} Spieler fehlen: {string.Join(", ", missingInPhase1)}. Warte weitere {phaseTimeout/1000}s");
-                
-                var phase2End = DateTime.UtcNow.AddMilliseconds(phaseTimeout);
-                
-                while (DateTime.UtcNow < phase2End && received.Count < activePlayers.Count && !cancellationToken.IsCancellationRequested)
-                {
-                    try
-                    {
-                        var msg = await network.ReceivePlacedPieceAsync(cancellationToken, 1000);
-                        if (msg != null && !received.Contains(msg.PlayerId) && activePlayers.Contains(msg.PlayerId))
-                        {
-                            results.Add(msg);
-                            received.Add(msg.PlayerId);
-                            if (playersWhoPlaced != null)
-                                playersWhoPlaced.Add(msg.PlayerId);
-                            missedRounds[msg.PlayerId] = 0;
-                            logger.LogInformation($"[Host] PlacedPiece von {msg.PlayerId} in Phase 2 erhalten ({received.Count}/{activePlayers.Count})");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning($"[Host] Fehler beim Empfangen von PlacedPiece: {ex.Message}");
-                    }
-                    
-                    await Task.Delay(10, cancellationToken);
-                }
-            }
             
-            // Phase 3: Finale Wartezeit für ganz langsame Spieler oder Prüfung auf Disconnect
-            if (received.Count < activePlayers.Count)
-            {
-                var missingInPhase2 = activePlayers.Where(id => !received.Contains(id)).ToList();
-                logger.LogInformation($"[Host] Phase 3: Letzte Chance für {missingInPhase2.Count} Spieler: {string.Join(", ", missingInPhase2)}. Warte finale {phaseTimeout/1000}s");
-                
-                var phase3End = DateTime.UtcNow.AddMilliseconds(phaseTimeout);
-                
-                while (DateTime.UtcNow < phase3End && received.Count < activePlayers.Count && !cancellationToken.IsCancellationRequested)
-                {
-                    try
-                    {
-                        var msg = await network.ReceivePlacedPieceAsync(cancellationToken, 1000);
-                        if (msg != null && !received.Contains(msg.PlayerId) && activePlayers.Contains(msg.PlayerId))
-                        {
-                            results.Add(msg);
-                            received.Add(msg.PlayerId);
-                            if (playersWhoPlaced != null)
-                                playersWhoPlaced.Add(msg.PlayerId);
-                            missedRounds[msg.PlayerId] = 0;
-                            logger.LogInformation($"[Host] PlacedPiece von {msg.PlayerId} in finaler Phase erhalten ({received.Count}/{activePlayers.Count})");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning($"[Host] Fehler beim Empfangen von PlacedPiece: {ex.Message}");
-                    }
-                    
-                    await Task.Delay(10, cancellationToken);
-                }
-            }
-            
-            // Prüfe fehlende Spieler - unterscheide zwischen langsam und disconnected
+            // Handle missing players (disconnects or very slow players)
             var missingPlayers = activePlayers.Where(id => !received.Contains(id)).ToList();
             if (missingPlayers.Count > 0)
             {
-                logger.LogWarning($"[Host] Nach allen Phasen fehlen {missingPlayers.Count} Spieler: {string.Join(", ", missingPlayers)}");
+                var elapsedMs = (DateTime.UtcNow - start).TotalMilliseconds;
+                logger.LogWarning($"[Host] {missingPlayers.Count} players missing after {elapsedMs:F0}ms: {string.Join(", ", missingPlayers)}");
                 
-                // Vorsichtigere Behandlung von Timeouts
+                // Track missed rounds for disconnect detection
                 foreach (var id in missingPlayers)
                 {
                     if (!missedRounds.ContainsKey(id))
                         missedRounds[id] = 0;
                     missedRounds[id]++;
                 }
-            }
-            else
-            {
-                logger.LogInformation($"[Host] ✓ Alle {activePlayers.Count} Spieler haben ihre Pieces platziert - perfekte Synchronisation!");
-            }
-            
-            // Eliminiere Spieler nur nach mehr verpassten Runden (3 statt 2) für bessere Toleranz
-            if (hps != null && spectators != null)
-            {
-                foreach (var id in missingPlayers)
+                
+                // Eliminate players after 2 missed rounds (likely disconnected) - more aggressive than original
+                if (hps != null && spectators != null)
                 {
-                    if (missedRounds[id] >= 3 && !spectators.Contains(id))
+                    foreach (var id in missingPlayers)
                     {
-                        logger.LogWarning($"[Host] Spieler {id} nach 3 verpassten Runden eliminiert (wahrscheinlich Disconnect)");
-                        hps[id] = 0;
-                        spectators.Add(id);
-                    }
-                    else if (missedRounds[id] >= 1)
-                    {
-                        logger.LogInformation($"[Host] Spieler {id} hat Runde verpasst ({missedRounds[id]}/3 Versuche)");
+                        if (missedRounds[id] >= 2 && !spectators.Contains(id))
+                        {
+                            logger.LogWarning($"[Host] Player {id} eliminated after 2 missed rounds (likely disconnected)");
+                            hps[id] = 0;
+                            spectators.Add(id);
+                        }
+                        else if (missedRounds[id] >= 1)
+                        {
+                            logger.LogInformation($"[Host] Player {id} missed round ({missedRounds[id]}/2 attempts)");
+                        }
                     }
                 }
             }
-            
-            logger.LogInformation($"[Host] Received {results.Count}/{activePlayers.Count} PlacedPiece messages in {(DateTime.UtcNow - start).TotalMilliseconds:F0}ms");
+            else
+            {
+                var elapsedMs = (DateTime.UtcNow - start).TotalMilliseconds;
+                logger.LogInformation($"[Host] ✓ Perfect synchronization! All {activePlayers.Count} players completed in {elapsedMs:F0}ms");
+            }
             return results;
         }
 
