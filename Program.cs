@@ -609,7 +609,7 @@ namespace TetrisMultiplayer
                         }
 
                         var localLeaderboard = playerIds.Select(pid => (pid, scores[pid], hps[pid], spectators.Contains(pid))).ToList();
-                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard, hostId, $"[Host] Round {round} - Piece {pieceId}", playerNames, playersWhoPlaced);
+                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard, hostId, $"[Host] Piece {pieceId}", playerNames, playersWhoPlaced, round);
                         
                         // Position cursor for controls info with safe positioning
                         Console.SetCursorPosition(2, TetrisMultiplayer.Game.TetrisEngine.Height + 8);
@@ -673,7 +673,7 @@ namespace TetrisMultiplayer
                         
                         // Update UI after placement
                         var localLeaderboard2 = playerIds.Select(pid => (pid, scores[pid], hps[pid], spectators.Contains(pid))).ToList();
-                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard2, hostId, "HOST PIECE PLACED - WAITING FOR CLIENTS...", playerNames, playersWhoPlaced);
+                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard2, hostId, "HOST PIECE PLACED - WAITING FOR CLIENTS...", playerNames, playersWhoPlaced, round);
                     }
 
                     // Warte auf PlacedPiece von allen Clients oder Timeout - INCREASED timeout für bessere Synchronisation
@@ -726,7 +726,7 @@ namespace TetrisMultiplayer
                     
                     // Final leaderboard update showing all who completed
                     var finalLeaderboard = playerIds.Select(pid => (pid, scores[pid], hps[pid], spectators.Contains(pid))).ToList();
-                    TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, finalLeaderboard, hostId, "ROUND COMPLETE", playerNames, playersWhoPlaced);
+                    TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, finalLeaderboard, hostId, "ROUND COMPLETE", playerNames, playersWhoPlaced, round);
                     
                     // Send comprehensive round results to all players
                     var roundResults = new { 
@@ -1419,7 +1419,7 @@ namespace TetrisMultiplayer
                                         }
                                         return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                     }).ToList();
-                                    TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, currentLeaderboard, playerId, $"Round {round} - Live Game", realtimePlayerNames, realtimePlayersPlaced);
+                                    TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, currentLeaderboard, playerId, "Live Game", realtimePlayerNames, realtimePlayersPlaced, round);
                                 }
                             }
                             await Task.Delay(50, cancellationToken);
@@ -1525,7 +1525,7 @@ namespace TetrisMultiplayer
                                     }).ToList()
                                     : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
                                 
-                                TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, displayLeaderboard, playerId, $"Round {round} - Piece {pieceId}", realtimePlayerNames);
+                                TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, displayLeaderboard, playerId, $"Piece {pieceId}", realtimePlayerNames, null, round);
                                 
                                 // Position cursor for controls info with safe positioning
                                 Console.SetCursorPosition(2, TetrisMultiplayer.Game.TetrisEngine.Height + 8);
@@ -1612,7 +1612,7 @@ namespace TetrisMultiplayer
                                             return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                         }).ToList()
                                         : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
-                                    TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, placedLeaderboard, playerId, "PIECE PLACED - WAITING FOR OTHERS...", realtimePlayerNames, realtimePlayersPlaced);
+                                    TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, placedLeaderboard, playerId, "PIECE PLACED - WAITING FOR OTHERS...", realtimePlayerNames, realtimePlayersPlaced, round);
                                 }
                                 
                                 if (waiting)
@@ -1636,7 +1636,7 @@ namespace TetrisMultiplayer
                                                 return (id, score, realtimeHp.GetValueOrDefault(id, 100), realtimeSpectators.Contains(id));
                                             }).ToList()
                                             : new List<(string, int, int, bool)>{ (playerId, engine.Score, 100, false) };
-                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, waitingLeaderboard, playerId, "WAITING FOR OTHERS...", realtimePlayerNames, realtimePlayersPlaced);
+                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, waitingLeaderboard, playerId, "WAITING FOR OTHERS...", realtimePlayerNames, realtimePlayersPlaced, round);
                                     }
 
                                     GameLogger.LogDebug($"[Client] Waiting for round results...");
@@ -1656,7 +1656,7 @@ namespace TetrisMultiplayer
                                         
                                         // Show who completed the round
                                         var completedPlayers = new HashSet<string>(rr.NewScores.Keys);
-                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "ROUND COMPLETE - ALL PLAYERS FINISHED", realtimePlayerNames, completedPlayers);
+                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "ROUND COMPLETE - ALL PLAYERS FINISHED", realtimePlayerNames, completedPlayers, round);
                                         
                                         // Check if we became a spectator
                                         if (rr.Spectators.Contains(playerId))
@@ -1670,7 +1670,7 @@ namespace TetrisMultiplayer
                                         
                                         // SYNCHRONIZATION FIX: Wait for host's "WaitForNextRound" message before proceeding
                                         GameLogger.LogDebug($"[Client] Waiting for synchronization message from host...");
-                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "SYNCHRONIZING - WAITING FOR ALL PLAYERS...", realtimePlayerNames, completedPlayers);
+                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "SYNCHRONIZING - WAITING FOR ALL PLAYERS...", realtimePlayerNames, completedPlayers, round);
                                         
                                         // Wait for the host's synchronization message
                                         while (!cancellationToken.IsCancellationRequested)
@@ -1679,7 +1679,7 @@ namespace TetrisMultiplayer
                                             if (waitMsg != null)
                                             {
                                                 GameLogger.LogDebug($"[Client] Received synchronization message: {waitMsg}");
-                                                TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, waitMsg, realtimePlayerNames, completedPlayers);
+                                                TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, waitMsg, realtimePlayerNames, completedPlayers, round);
                                                 break;
                                             }
                                             await Task.Delay(100, cancellationToken);
@@ -1687,7 +1687,7 @@ namespace TetrisMultiplayer
                                         
                                         // NEUE SYNCHRONISATIONS-MECHANISMUS: Warte auf RoundReadyRequest und bestätige
                                         GameLogger.LogDebug($"[Client] Waiting for RoundReadyRequest from host...");
-                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "WARTE AUF BEREITSCHAFTSANFRAGE...", realtimePlayerNames, completedPlayers);
+                                        TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "WARTE AUF BEREITSCHAFTSANFRAGE...", realtimePlayerNames, completedPlayers, round);
                                         
                                         var readyTimeout = DateTime.UtcNow.AddSeconds(15); // 15 Sekunden Timeout für Ready-Request
                                         bool receivedReadyRequest = false;
@@ -1698,7 +1698,7 @@ namespace TetrisMultiplayer
                                             if (readyRequestRound.HasValue && readyRequestRound.Value == round)
                                             {
                                                 GameLogger.LogDebug($"[Client] Received RoundReadyRequest for round {readyRequestRound.Value}, sending confirmation...");
-                                                TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "BESTÄTIGE BEREITSCHAFT FÜR NÄCHSTE RUNDE...", realtimePlayerNames, completedPlayers);
+                                                TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(engine, roundLeaderboard, playerId, "BESTÄTIGE BEREITSCHAFT FÜR NÄCHSTE RUNDE...", realtimePlayerNames, completedPlayers, round);
                                                 
                                                 // Bestätige Bereitschaft an Host
                                                 await network.SendRoundReadyConfirmation(round);

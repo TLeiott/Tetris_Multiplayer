@@ -27,6 +27,7 @@ namespace TetrisMultiplayer.UI
         private static int[,]? _lastRenderedGrid;
         private static int _lastScore = -1;
         private static string _lastStatusMsg = "";
+        private static int? _lastRoundNumber = null;
         private static List<(string Name, int Score, int Hp, bool IsSpectator)>? _lastLeaderboard;
         private static bool _isInitialized = false;
         
@@ -238,7 +239,7 @@ namespace TetrisMultiplayer.UI
             _lastRenderedGrid = currentGrid;
         }
 
-        public static void DrawGameWithLeaderboard(TetrisEngine engine, List<(string Name, int Score, int Hp, bool IsSpectator)> leaderboard, string selfName, string statusMsg = "", Dictionary<string, string>? playerNames = null, HashSet<string>? playersWhoPlaced = null)
+        public static void DrawGameWithLeaderboard(TetrisEngine engine, List<(string Name, int Score, int Hp, bool IsSpectator)> leaderboard, string selfName, string statusMsg = "", Dictionary<string, string>? playerNames = null, HashSet<string>? playersWhoPlaced = null, int? roundNumber = null)
         {
             int h = TetrisEngine.Height, w = TetrisEngine.Width;
             int fieldLeft = 2, fieldTop = 3; // Increased top margin to prevent overlap
@@ -257,6 +258,7 @@ namespace TetrisMultiplayer.UI
                 _lastLeaderboard = null;
                 _lastScore = -1;
                 _lastStatusMsg = "";
+                _lastRoundNumber = null;
                 
                 // Draw colored game title at top
                 Console.SetCursorPosition(fieldLeft, 0);
@@ -394,6 +396,14 @@ namespace TetrisMultiplayer.UI
                 _lastLeaderboard = new List<(string, int, int, bool)>(leaderboard);
             }
 
+            // Update colored round number display (always visible, separate from status)
+            if (roundNumber.HasValue && _lastRoundNumber != roundNumber.Value)
+            {
+                Console.SetCursorPosition(fieldLeft, fieldTop + h + 3);
+                WriteColored($"Round: {roundNumber.Value}".PadRight(20), ConsoleColor.Cyan);
+                _lastRoundNumber = roundNumber.Value;
+            }
+
             // Update colored status message only if changed
             if (_lastStatusMsg != statusMsg)
             {
@@ -407,7 +417,7 @@ namespace TetrisMultiplayer.UI
 
         public static void DrawGameWithLeaderboard(TetrisEngine engine, List<(string Name, int Score, int Hp, bool IsSpectator)> leaderboard, string selfName, string statusMsg = "")
         {
-            DrawGameWithLeaderboard(engine, leaderboard, selfName, statusMsg, null, null);
+            DrawGameWithLeaderboard(engine, leaderboard, selfName, statusMsg, null, null, null);
         }
 
         private static bool LeaderboardEquals(List<(string Name, int Score, int Hp, bool IsSpectator)> a, 
@@ -547,6 +557,7 @@ namespace TetrisMultiplayer.UI
             _lastRenderedGrid = null;
             _lastScore = -1;
             _lastStatusMsg = "";
+            _lastRoundNumber = null;
             _lastLeaderboard = null;
             _isInitialized = false;
             // Reset preview cache

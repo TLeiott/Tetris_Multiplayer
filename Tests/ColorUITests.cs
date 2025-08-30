@@ -27,7 +27,7 @@ namespace TetrisMultiplayer.Tests
                 };
                 
                 // Dies sollte keine Ausnahme werfen
-                ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "TestPlayer", "Testing Colors");
+                ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "TestPlayer", "Testing Colors", null, null, 1);
                 
                 Assert.True(true); // Test besteht wenn keine Ausnahme auftritt
             }
@@ -47,13 +47,13 @@ namespace TetrisMultiplayer.Tests
             };
             
             // Zeichne etwas mit Farben
-            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "TestPlayer", "Color Test");
+            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "TestPlayer", "Color Test", null, null, 1);
             
             // Reset und prüfe dass es ohne Fehler funktioniert
             ConsoleUI.ResetUI();
             
             // Sollte wieder zeichnen können
-            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "TestPlayer", "After Reset");
+            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "TestPlayer", "After Reset", null, null, 1);
             
             Assert.True(true); // Test besteht wenn keine Ausnahme auftritt
         }

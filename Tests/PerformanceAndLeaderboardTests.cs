@@ -33,7 +33,7 @@ namespace TetrisMultiplayer.Tests
             var playersWhoPlaced = new HashSet<string> { "player2" };
             
             // This should not throw and should handle all parameters correctly
-            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test Status", playerNames, playersWhoPlaced);
+            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test Status", playerNames, playersWhoPlaced, 1);
             
             Assert.True(true); // If we get here without exceptions, the test passes
         }
@@ -49,7 +49,7 @@ namespace TetrisMultiplayer.Tests
             };
             
             // Should handle null playerNames and playersWhoPlaced
-            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test", null, null);
+            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test", null, null, 1);
             
             Assert.True(true);
         }
