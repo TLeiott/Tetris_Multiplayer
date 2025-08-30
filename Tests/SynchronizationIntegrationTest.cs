@@ -30,13 +30,13 @@ namespace TetrisMultiplayer.Tests
             Assert.Contains("client1", activePlayers);
             Assert.Contains("client2", activePlayers);
             
-            // Test 2: Neue Timeout-Berechnung ist fairer
-            var baseTimeout = 25000; // Neuer Host-Call Timeout
+            // Test 2: Neue Timeout-Berechnung ist fairer und schneller für bessere Synchronisation
+            var baseTimeout = 15000; // Optimierter Host-Call Timeout für bessere Synchronisation
             var minTimeout = Math.Max(baseTimeout, 15000); // WaitForPlacedPieces Mindest-Timeout
             var phaseTimeout = minTimeout / 3; // 3-Phasen System
             
-            Assert.True(minTimeout >= 25000); // Ausreichend Zeit für alle
-            Assert.True(phaseTimeout >= 8000); // Jede Phase mindestens 8+ Sekunden
+            Assert.True(minTimeout >= 15000); // Ausreichend Zeit für alle, aber nicht zu lang
+            Assert.True(phaseTimeout >= 5000); // Jede Phase mindestens 5 Sekunden
             
             // Test 3: Tolerantere Eliminierung
             var maxMissedRounds = 3; // Neu: 3 statt 2
@@ -50,24 +50,23 @@ namespace TetrisMultiplayer.Tests
         {
             // Test der 3-Phasen Synchronisation für faire Behandlung aller Spieler
             
-            var totalTimeout = 25000; // 25 Sekunden total
-            var phaseTimeout = totalTimeout / 3; // ~8.33 Sekunden pro Phase
+            var totalTimeout = 15000; // 15 Sekunden total - optimiert für bessere Host-Client Synchronisation
+            var phaseTimeout = totalTimeout / 3; // ~5 Sekunden pro Phase
             
             // Phase 1: Standardzeit - die meisten schnellen Spieler
             var phase1Duration = phaseTimeout;
-            Assert.True(phase1Duration >= 8000); // Mindestens 8 Sekunden
+            Assert.True(phase1Duration >= 5000); // Mindestens 5 Sekunden
             
             // Phase 2: Zusatzzeit für langsamere Spieler
             var phase2Duration = phaseTimeout;
-            Assert.True(phase2Duration >= 8000); // Weitere 8+ Sekunden
+            Assert.True(phase2Duration >= 5000); // Weitere 5 Sekunden
             
             // Phase 3: Finale Chance oder Disconnect-Erkennung
             var phase3Duration = phaseTimeout;
-            Assert.True(phase3Duration >= 8000); // Weitere 8+ Sekunden
-            
-            // Gesamtzeit ist fair für alle Spielgeschwindigkeiten
+            Assert.True(phase3Duration >= 5000); // Weitere 5 Sekunden
+            // Gesamtzeit ist fair für alle Spielgeschwindigkeiten, aber nicht zu lang
             var totalTime = phase1Duration + phase2Duration + phase3Duration;
-            Assert.True(totalTime >= 24000); // Mindestens 24 Sekunden total
+            Assert.True(totalTime >= 15000); // Mindestens 15 Sekunden total
             
             Console.WriteLine($"✓ Three-phase timeout design: {phase1Duration/1000}s + {phase2Duration/1000}s + {phase3Duration/1000}s = {totalTime/1000}s total");
         }
@@ -164,10 +163,10 @@ namespace TetrisMultiplayer.Tests
             var newMissedRoundLimit = 3;
             Assert.True(newMissedRoundLimit > oldMissedRoundLimit);
             
-            // 2. Längere Timeouts
-            var oldTimeout = 15000; // 15 Sekunden
-            var newTimeout = 25000; // 25 Sekunden  
-            Assert.True(newTimeout > oldTimeout);
+            // 2. Optimierte Timeouts für bessere Synchronisation
+            var oldTimeout = 25000; // 25 Sekunden (zu lang)
+            var newTimeout = 15000; // 15 Sekunden (optimiert)  
+            Assert.True(newTimeout < oldTimeout); // Schnellere Synchronisation
             
             // 3. Detaillierteres Logging
             var logLevels = new[] { "Phase 1", "Phase 2", "Phase 3", "perfekte Synchronisation", "Disconnect" };

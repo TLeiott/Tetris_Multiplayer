@@ -676,8 +676,8 @@ namespace TetrisMultiplayer
                         TetrisMultiplayer.UI.ConsoleUI.DrawGameWithLeaderboard(hostEngine, localLeaderboard2, hostId, "HOST PIECE PLACED - WAITING FOR CLIENTS...", playerNames, playersWhoPlaced);
                     }
 
-                    // Warte auf PlacedPiece von allen Clients oder Timeout - INCREASED timeout für bessere Synchronisation
-                    var placedPieces = await WaitForPlacedPieces(network, network.ConnectedPlayerIds.ToList(), 25000, logger, cancellationToken, hps, spectators, playersWhoPlaced);
+                    // Warte auf PlacedPiece von allen Clients oder Timeout - REDUCED timeout für bessere Host-Client Synchronisation
+                    var placedPieces = await WaitForPlacedPieces(network, network.ConnectedPlayerIds.ToList(), 15000, logger, cancellationToken, hps, spectators, playersWhoPlaced);
 
                     // Process client pieces using reported deltas (no host-side simulation)
                     foreach (var placedPiece in placedPieces)

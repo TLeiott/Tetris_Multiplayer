@@ -84,12 +84,12 @@ namespace TetrisMultiplayer.Tests
             // Test dass die WaitForPlacedPieces Funktion die neuen Timeout-Phasen konfiguriert hat
             // Wir können die Signatur und Existenz der Funktion testen
             
-            // Prüfe dass der minimale Timeout von 20 Sekunden eingehalten wird
-            var minTimeout = 20000; // 20 Sekunden Mindest-Timeout
+            // Prüfe dass der optimierte Timeout von 15 Sekunden für bessere Synchronisation verwendet wird
+            var minTimeout = 15000; // 15 Sekunden optimierter Timeout
             var phaseTimeout = minTimeout / 3; // Aufgeteilt in 3 Phasen
             
-            Assert.True(phaseTimeout >= 6000); // Jede Phase mindestens 6+ Sekunden
-            Assert.True(minTimeout >= 20000); // Gesamttimeout mindestens 20 Sekunden
+            Assert.True(phaseTimeout >= 5000); // Jede Phase mindestens 5 Sekunden
+            Assert.True(minTimeout >= 15000); // Gesamttimeout mindestens 15 Sekunden
             
             // Phasen-Aufteilung sollte fairer sein
             Assert.Equal(minTimeout / 3, phaseTimeout);
@@ -131,11 +131,11 @@ namespace TetrisMultiplayer.Tests
             
             Assert.True(newEliminationRounds > oldEliminationRounds);
             
-            // Test dass die neuen Timeouts länger sind
+            // Test dass die optimierten Timeouts bessere Synchronisation ermöglichen
             var oldBaseTimeout = 10000; // 10 Sekunden alter Wert
-            var newMinTimeout = 20000; // 20 Sekunden neuer Mindestwert
+            var newMinTimeout = 15000; // 15 Sekunden optimierter Wert für bessere Host-Client Synchronisation
             
-            Assert.True(newMinTimeout >= oldBaseTimeout * 2);
+            Assert.True(newMinTimeout > oldBaseTimeout); // Ausreichend Zeit, aber nicht zu lang
             
             Console.WriteLine("✓ New synchronization is more tolerant of slower players");
         }
