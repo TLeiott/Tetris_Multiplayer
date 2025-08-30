@@ -32,13 +32,13 @@ namespace TetrisMultiplayer.Tests
             var playersWhoPlaced = new HashSet<string> { "Alice", "Bob" };
             
             // Draw something to initialize state
-            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test Status", playerNames, playersWhoPlaced);
+            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test Status", playerNames, playersWhoPlaced, 1);
             
             // Reset and verify it can be called without issues
             ConsoleUI.ResetUI();
             
             // Should be able to draw again without issues
-            ConsoleUI.DrawGameWithLeaderboard(engine, new List<(string, int, int, bool)>(), "test", "", null, null);
+            ConsoleUI.DrawGameWithLeaderboard(engine, new List<(string, int, int, bool)>(), "test", "", null, null, 1);
             
             Assert.True(true); // If we get here without exceptions, the test passes
         }
@@ -101,7 +101,7 @@ namespace TetrisMultiplayer.Tests
             var playersWhoPlaced = new HashSet<string> { "player2" };
             
             // This should not throw and should handle all parameters correctly
-            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test Status", playerNames, playersWhoPlaced);
+            ConsoleUI.DrawGameWithLeaderboard(engine, leaderboard, "player1", "Test Status", playerNames, playersWhoPlaced, 1);
             
             Assert.True(true); // If we get here without exceptions, the test passes
         }
@@ -111,7 +111,7 @@ namespace TetrisMultiplayer.Tests
         {
             var engine = new TetrisEngine();
             // Should be able to draw again without issues
-            ConsoleUI.DrawGameWithLeaderboard(engine, new List<(string, int, int, bool)>(), "test", "", null, null);
+            ConsoleUI.DrawGameWithLeaderboard(engine, new List<(string, int, int, bool)>(), "test", "", null, null, 1);
             
             Assert.True(true);
         }

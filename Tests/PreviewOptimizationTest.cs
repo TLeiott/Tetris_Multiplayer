@@ -38,7 +38,7 @@ namespace TetrisMultiplayer.Tests
                     ("TestPlayer", engine.Score, 100, false) 
                 };
                 
-                ConsoleUI.DrawGameWithLeaderboard(engine, dummyLeaderboard, "TestPlayer", "Preview Optimization Test");
+                ConsoleUI.DrawGameWithLeaderboard(engine, dummyLeaderboard, "TestPlayer", "Preview Optimization Test", null, null, 1);
                 
                 var key = Console.ReadKey(true);
                 if (key.Key == ConsoleKey.Q) break;
