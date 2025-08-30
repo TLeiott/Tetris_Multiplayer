@@ -30,6 +30,10 @@ namespace TetrisMultiplayer.Networking
     // Single client receiver state to prevent concurrent stream reads
     private CancellationTokenSource? _clientReceiveCts;
     private Task? _clientReceiveTask;
+    
+    // Track host connection status for clients
+    private volatile bool _hostDisconnected = false;
+    public bool IsHostDisconnected => _hostDisconnected;
 
         // Lobby-Discovery-System
         private UdpClient? _discoveryServer;
@@ -773,7 +777,7 @@ namespace TetrisMultiplayer.Networking
             if (_clientStream == null) return;
             try
             {
-                while (!cancellationToken.IsCancellationRequested)
+                while (!cancellationToken.IsCancellationRequested && !_hostDisconnected)
                 {
                     var msg = await ReadFramedJsonAsync(_clientStream, cancellationToken);
                     if (msg == null)
@@ -803,10 +807,22 @@ namespace TetrisMultiplayer.Networking
                     }
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) 
+            {
+                // Normal cancellation, don't mark as disconnected
+            }
             catch (Exception ex)
             {
-                LogDebugToFile($"Error in ClientReceiveLoop: {ex.Message}");
+                // Any other exception likely means host disconnected
+                LogDebugToFile($"Error in ClientReceiveLoop (likely host disconnect): {ex.Message}");
+                _hostDisconnected = true;
+                
+                // Enqueue a special disconnect message for the client to handle
+                var disconnectMessage = JsonSerializer.SerializeToElement(new { type = "HostDisconnected" });
+                lock (_queueLock)
+                {
+                    _clientMessageQueue.Enqueue(disconnectMessage);
+                }
             }
         }
 
@@ -878,6 +894,32 @@ namespace TetrisMultiplayer.Networking
         {
             var msg = new { type = "RoundReadyConfirmation", round };
             await SendToHostAsync(msg);
+        }
+        
+        // Client: Check for host disconnection message
+        public Task<bool> CheckForHostDisconnectAsync()
+        {
+            lock (_queueLock)
+            {
+                var tempQueue = new Queue<JsonElement>();
+                while (_clientMessageQueue.Count > 0)
+                {
+                    var queuedElement = _clientMessageQueue.Dequeue();
+                    if (queuedElement.TryGetProperty("type", out var qTypeProp) && qTypeProp.GetString() == "HostDisconnected")
+                    {
+                        // Don't put this message back, consume it
+                        // Put back remaining messages
+                        while (tempQueue.Count > 0)
+                            _clientMessageQueue.Enqueue(tempQueue.Dequeue());
+                        return Task.FromResult(true);
+                    }
+                    tempQueue.Enqueue(queuedElement);
+                }
+                // Put back all messages
+                while (tempQueue.Count > 0)
+                    _clientMessageQueue.Enqueue(tempQueue.Dequeue());
+            }
+            return Task.FromResult(_hostDisconnected);
         }
 
         // Host: Empfange RoundReadyConfirmation von einem Client

@@ -1227,6 +1227,30 @@ namespace TetrisMultiplayer
             
             while (!cancellationToken.IsCancellationRequested && !gameStarted)
             {
+                // Check for host disconnection first
+                var hostDisconnected = await network.CheckForHostDisconnectAsync();
+                if (hostDisconnected)
+                {
+                    // Host has disconnected, show message and exit
+                    Console.Clear();
+                    
+                    // Display disconnect message in a nice box
+                    Console.WriteLine("\n");
+                    Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
+                    Console.WriteLine("║                     HOST VERBINDUNG VERLOREN                ║");
+                    Console.WriteLine("║                                                              ║");
+                    Console.WriteLine("║  Der Host hat die Verbindung beendet oder ist nicht mehr    ║");
+                    Console.WriteLine("║  erreichbar. Das Programm wird beendet.                     ║");
+                    Console.WriteLine("║                                                              ║");
+                    Console.WriteLine("║  Drücken Sie eine beliebige Taste zum Beenden...            ║");
+                    Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
+                    Console.WriteLine();
+                    
+                    // Wait for user input then exit
+                    Console.ReadKey(true);
+                    return;
+                }
+                
                 // Check if game started FIRST - this is critical for proper transition
                 if (network.GameManager != null && !gameStarted)
                 {
@@ -1354,6 +1378,31 @@ namespace TetrisMultiplayer
                 {
                     try
                     {
+                        // Check for host disconnection first
+                        var hostDisconnected = await network.CheckForHostDisconnectAsync();
+                        if (hostDisconnected)
+                        {
+                            // Host has disconnected, show message and exit
+                            GameLogger.SetGameActive(false);
+                            Console.Clear();
+                            
+                            // Display disconnect message in a nice box
+                            Console.WriteLine("\n");
+                            Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
+                            Console.WriteLine("║                     HOST VERBINDUNG VERLOREN                ║");
+                            Console.WriteLine("║                                                              ║");
+                            Console.WriteLine("║  Der Host hat die Verbindung beendet oder ist nicht mehr    ║");
+                            Console.WriteLine("║  erreichbar. Das Spiel wird beendet.                        ║");
+                            Console.WriteLine("║                                                              ║");
+                            Console.WriteLine("║  Drücken Sie eine beliebige Taste zum Beenden...            ║");
+                            Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
+                            Console.WriteLine();
+                            
+                            // Wait for user input then exit
+                            Console.ReadKey(true);
+                            return;
+                        }
+                        
                         // Empfange SpectatorSnapshot, falls Spectator
                         if (isSpectator)
                         {
