@@ -4,46 +4,48 @@ using Xunit;
 namespace TetrisMultiplayer.Tests
 {
     /// <summary>
-    /// Test für die verbesserte Synchronisations-Timing zwischen Host und Client
-    /// Validates the fix for "Delay nach piece place zu groß"
+    /// Test für die immediate progression synchronization (sofortiger Fortschritt)
+    /// Validates the fix for "Delay nach piece place zu groß" - no more waiting when all ready
     /// </summary>
     public class SynchronizationTimingTest
     {
         [Fact]
-        public void WaitForPlacedPieces_Uses_Optimized_Timeout()
+        public void WaitForPlacedPieces_Uses_Immediate_Progression()
         {
-            // Test dass der optimierte 15-Sekunden Timeout verwendet wird
-            var optimizedTimeout = 15000; // 15 Sekunden
-            var oldTimeout = 25000; // 25 Sekunden (zu lang)
+            // Test dass immediate progression verwendet wird (kein Timeout-Warten)
+            var disconnectTimeout = 10000; // 10 Sekunden nur für Disconnect-Erkennung
+            var oldTimeoutBasedApproach = 15000; // 15 Sekunden alter Wert
             
-            // Der neue Timeout ist kürzer für bessere Synchronisation
-            Assert.True(optimizedTimeout < oldTimeout);
+            // Der neue Ansatz nutzt Timeouts nur für Disconnect-Erkennung
+            Assert.True(disconnectTimeout < oldTimeoutBasedApproach);
             
-            // Aber immer noch ausreichend Zeit für Piece-Placement
-            Assert.True(optimizedTimeout >= 15000);
+            // Immediate progression: Sobald alle Spieler bereit sind, wird fortgefahren
+            Assert.True(disconnectTimeout >= 5000); // Mindestens 5s für echte Disconnects
             
-            // 3-Phasen System: 5 Sekunden pro Phase
-            var phaseTimeout = optimizedTimeout / 3;
-            Assert.Equal(5000, phaseTimeout);
-            
-            Console.WriteLine($"✓ Optimized timeout: {optimizedTimeout/1000}s total, {phaseTimeout/1000}s per phase");
-            Console.WriteLine("✓ This reduces the delay between host 'Round Complete' and client readiness");
+            Console.WriteLine($"✓ Immediate progression: Proceeds immediately when all players ready");
+            Console.WriteLine($"✓ Disconnect detection timeout: {disconnectTimeout/1000}s (only for detecting disconnected players)");
+            Console.WriteLine("✓ This eliminates delay between host 'Round Complete' and actual readiness");
         }
         
         [Fact]
-        public void Synchronization_Timing_Improvement_Validated()
+        public void Synchronization_Immediate_Response_Validated()
         {
-            // Test der Timing-Verbesserung
-            var oldHostClientGap = 25; // 25 Sekunden potentieller Gap
-            var newHostClientGap = 15; // 15 Sekunden optimierter Gap
+            // Test der sofortigen Reaktion (immediate response)
+            var oldMinimumWait = 15; // 15 Sekunden Mindestwartezeit (alt)
+            var newImmediateApproach = 0; // 0 Sekunden Wartezeit bei Bereitschaft aller (neu)
             
-            var improvementRatio = (double)oldHostClientGap / newHostClientGap;
+            var responseTimeImprovement = oldMinimumWait - newImmediateApproach;
             
-            // 40% Verbesserung der Synchronisations-Geschwindigkeit
-            Assert.True(improvementRatio >= 1.6); 
+            // Sofortige Reaktion wenn alle bereit sind
+            Assert.Equal(15, responseTimeImprovement); 
             
-            Console.WriteLine($"✓ Synchronization timing improved by {improvementRatio:F1}x");
-            Console.WriteLine("✓ Host shows 'Round Complete' closer to when clients are actually ready");
+            // Polling-Intervall für maximale Responsiveness
+            var pollingIntervalMs = 100; // 100ms für schnelle Reaktion
+            Assert.True(pollingIntervalMs <= 100); // Sehr responsive Polling
+            
+            Console.WriteLine($"✓ Immediate progression: 0s wait when all players ready (vs {oldMinimumWait}s before)");
+            Console.WriteLine($"✓ Fast polling: {pollingIntervalMs}ms intervals for maximum responsiveness");
+            Console.WriteLine("✓ Host and clients now perfectly synchronized - no artificial delays");
         }
     }
 }

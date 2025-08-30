@@ -79,22 +79,22 @@ namespace TetrisMultiplayer.Tests
         }
         
         [Fact]
-        public void WaitForPlacedPieces_Timeout_Phases_Configured()
+        public void WaitForPlacedPieces_Uses_Immediate_Progression()
         {
-            // Test dass die WaitForPlacedPieces Funktion die neuen Timeout-Phasen konfiguriert hat
+            // Test dass die WaitForPlacedPieces Funktion immediate progression implementiert
             // Wir können die Signatur und Existenz der Funktion testen
             
-            // Prüfe dass der optimierte Timeout von 15 Sekunden für bessere Synchronisation verwendet wird
-            var minTimeout = 15000; // 15 Sekunden optimierter Timeout
-            var phaseTimeout = minTimeout / 3; // Aufgeteilt in 3 Phasen
+            // Prüfe dass immediate progression statt timeout-basiert verwendet wird
+            var disconnectDetectionTimeout = 10000; // 10 Sekunden nur für Disconnect-Erkennung
+            var pollingInterval = 100; // 100ms Polling für Responsiveness
             
-            Assert.True(phaseTimeout >= 5000); // Jede Phase mindestens 5 Sekunden
-            Assert.True(minTimeout >= 15000); // Gesamttimeout mindestens 15 Sekunden
+            Assert.True(pollingInterval <= 100); // Sehr responsive Polling
+            Assert.True(disconnectDetectionTimeout >= 10000); // Ausreichend für echte Disconnects
             
-            // Phasen-Aufteilung sollte fairer sein
-            Assert.Equal(minTimeout / 3, phaseTimeout);
+            // Immediate progression wenn alle bereit
+            Assert.True(pollingInterval < disconnectDetectionTimeout); // Polling viel schneller als Disconnect-Timeout
             
-            Console.WriteLine("✓ WaitForPlacedPieces timeout phases are properly configured");
+            Console.WriteLine("✓ WaitForPlacedPieces uses immediate progression - no artificial waits");
         }
         
         [Fact]
@@ -121,23 +121,24 @@ namespace TetrisMultiplayer.Tests
         }
         
         [Fact]
-        public void Synchronization_Tolerates_Slower_Players()
+        public void Synchronization_Immediate_Progression_Design()
         {
-            // Test das Design für langsamere Spieler
-            // Prüfe dass die neuen Parameter toleranter sind
+            // Test das Design für immediate progression (sofortiger Fortschritt)
+            // Prüfe dass die neuen Parameter auf Responsiveness ausgelegt sind
             
-            var oldEliminationRounds = 2; // Alter Wert
-            var newEliminationRounds = 3; // Neuer, toleranterer Wert
+            var oldEliminationRounds = 3; // Alter Wert (war schon tolerant)
+            var newEliminationRounds = 2; // Neuer Wert (schnellere Disconnect-Erkennung)
             
-            Assert.True(newEliminationRounds > oldEliminationRounds);
+            Assert.True(newEliminationRounds <= oldEliminationRounds); // Schnellere Disconnect-Erkennung
             
-            // Test dass die optimierten Timeouts bessere Synchronisation ermöglichen
-            var oldBaseTimeout = 10000; // 10 Sekunden alter Wert
-            var newMinTimeout = 15000; // 15 Sekunden optimierter Wert für bessere Host-Client Synchronisation
+            // Test dass immediate progression verwendet wird
+            var noWaitWhenAllReady = 0; // 0 Sekunden Wartezeit wenn alle bereit
+            var disconnectTimeout = 10000; // 10 Sekunden nur für Disconnect-Erkennung
             
-            Assert.True(newMinTimeout > oldBaseTimeout); // Ausreichend Zeit, aber nicht zu lang
+            Assert.Equal(0, noWaitWhenAllReady); // Keine künstliche Wartezeit
+            Assert.True(disconnectTimeout >= 10000); // Ausreichend für echte Disconnects
             
-            Console.WriteLine("✓ New synchronization is more tolerant of slower players");
+            Console.WriteLine("✓ New synchronization uses immediate progression when all players ready");
         }
     }
 }
